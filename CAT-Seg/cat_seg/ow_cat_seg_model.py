@@ -37,6 +37,8 @@ class OWCATSeg(nn.Module):
 
         #ow-ovss new
         unknown_cls: int = 75,
+        crop_size:int = 384,
+
     ):
         """
         Args:
@@ -78,7 +80,16 @@ class OWCATSeg(nn.Module):
                 params.requires_grad = False
 
         self.sliding_window = sliding_window
-        self.clip_resolution = (384, 384) if clip_pretrained == "ViT-B/16" else (336, 336)
+
+        # ow-ovss new
+        self.unknown_cls = unknown_cls
+        self.crop_size = crop_size
+
+        # ow-ovss new
+        if self.crop_size[0] == 256: self.clip_resolution = (256, 256)  # 256/16 = 16x16 features
+        else: self.clip_resolution = (384, 384) if clip_pretrained == "ViT-B/16" else (336, 336)
+
+        #self.clip_resolution = (384, 384) if clip_pretrained == "ViT-B/16" else (336, 336)
 
         self.proj_dim = 768 if clip_pretrained == "ViT-B/16" else 1024
         self.upsample1 = nn.ConvTranspose2d(self.proj_dim, 256, kernel_size=2, stride=2)
@@ -89,8 +100,7 @@ class OWCATSeg(nn.Module):
         for l in self.layer_indexes:
             self.sem_seg_head.predictor.clip_model.visual.transformer.resblocks[l].register_forward_hook(lambda m, _, o: self.layers.append(o))
 
-        # ow-ovss new
-        self.unknown_cls = unknown_cls
+
 
     @classmethod
     def from_config(cls, cfg):
@@ -112,6 +122,7 @@ class OWCATSeg(nn.Module):
             "backbone_multiplier": cfg.SOLVER.BACKBONE_MULTIPLIER,
             "clip_pretrained": cfg.MODEL.SEM_SEG_HEAD.CLIP_PRETRAINED,
             "unknown_cls": cfg.MODEL.SEM_SEG_HEAD.UNKNOWN_CLS,
+            "crop_size" : cfg.INPUT.CROP.SIZE,
         }
 
     @property
