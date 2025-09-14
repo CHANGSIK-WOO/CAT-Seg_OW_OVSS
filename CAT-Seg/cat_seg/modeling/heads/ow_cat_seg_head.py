@@ -167,19 +167,99 @@ class OWCATSegHead(nn.Module):
             dis_sim.append(self.get_sim(positive, negative))
         return torch.stack(dis_sim).to('cuda')
 
+    # def select_att(self, per_class=25):
+    #     """Select attributes based on distribution similarity and diversity."""
+    #     if self.distributions is None or self.att_embeddings is None:
+    #         return
+    #
+    #     distributions = torch.load(self.distributions, map_location='cuda')
+    #     self.positive_distributions, self.negative_distributions = distributions['positive_distributions'], \
+    #     distributions['negative_distributions']
+    #
+    #     thr_id = self.thrs.index(self.thr)
+    #     distribution_sim = self.get_all_dis_sim(self.positive_distributions[thr_id],
+    #                                             self.negative_distributions[thr_id])
+    #
+    #     all_atts = self.all_atts.to(self.att_embeddings.device)
+    #     att_embeddings_norm = F.normalize(all_atts, p=2, dim=1)
+    #     if self.use_sigmoid:
+    #         cosine_sim_matrix = torch.matmul(att_embeddings_norm, att_embeddings_norm.T).sigmoid()
+    #     else:
+    #         cosine_sim_matrix = torch.matmul(att_embeddings_norm, att_embeddings_norm.T).abs()
+    #
+    #     selected_indices = []
+    #     for _ in range(per_class * self.num_classes):
+    #         if len(selected_indices) == 0:
+    #             _, idx = distribution_sim.min(dim=0)
+    #         else:
+    #             unselected_indices = list(set(range(len(self.texts))) - set(selected_indices))
+    #             cosine_sim_with_selected = cosine_sim_matrix[unselected_indices][:, selected_indices].mean(dim=1)
+    #             distribution_sim_unselected = distribution_sim[unselected_indices]
+    #             score = self.alpha * distribution_sim_unselected + (1 - self.alpha) * cosine_sim_with_selected
+    #             idx = unselected_indices[score.argmin()]
+    #         selected_indices.append(idx)
+    #
+    #     selected_indices = torch.tensor(selected_indices).to(self.att_embeddings.device)
+    #     self.att_embeddings = torch.nn.Parameter(all_atts[selected_indices]).to(self.att_embeddings.device)
+    #     self.texts = [self.texts[i] for i in selected_indices]
+    #
+    #     print(f"Attribute selection completed: selected {len(selected_indices)} attributes from current training data")
+
     def select_att(self, per_class=25):
         """Select attributes based on distribution similarity and diversity."""
-        if self.distributions is None or self.att_embeddings is None:
+        if self.att_embeddings is None:
+            print("No att_embeddings available, skipping attribute selection")
             return
 
-        distributions = torch.load(self.distributions, map_location='cuda')
-        self.positive_distributions, self.negative_distributions = distributions['positive_distributions'], \
-        distributions['negative_distributions']
+        # 현재 수집된 distributions가 있는지 확인
+        if (self.positive_distributions is None or
+                self.negative_distributions is None):
+            print("No distributions collected in current training, skipping attribute selection")
+            return
 
-        thr_id = self.thrs.index(self.thr)
-        distribution_sim = self.get_all_dis_sim(self.positive_distributions[thr_id],
-                                                self.negative_distributions[thr_id])
+        import os
 
+        # 파일이 있는지 확인하여 분기 처리
+        if self.distributions is not None and os.path.exists(self.distributions):
+            print(f"Loading existing distributions from {self.distributions}")
+            try:
+                # 기존 파일에서 데이터 로드
+                saved_distributions = torch.load(self.distributions, map_location='cuda')
+                saved_positive = saved_distributions['positive_distributions']
+                saved_negative = saved_distributions['negative_distributions']
+
+                # 기존 데이터와 현재 수집된 데이터를 결합/업데이트
+                thr_id = self.thrs.index(self.thr)
+
+                # 기존 데이터를 사용하여 계산
+                distribution_sim = self.get_all_dis_sim(saved_positive[thr_id],
+                                                        saved_negative[thr_id])
+                print("Using existing distributions for attribute selection")
+
+            except Exception as e:
+                print(f"Error loading existing distributions: {e}")
+                print("Falling back to current training data")
+                # 에러 발생시 현재 데이터 사용
+                thr_id = self.thrs.index(self.thr)
+                distribution_sim = self.get_all_dis_sim(self.positive_distributions[thr_id],
+                                                        self.negative_distributions[thr_id])
+        else:
+            print("No existing distributions found, using current training data")
+            # 파일이 없으면 현재 수집된 데이터만 사용
+            thr_id = self.thrs.index(self.thr)
+            distribution_sim = self.get_all_dis_sim(self.positive_distributions[thr_id],
+                                                    self.negative_distributions[thr_id])
+
+        # 전체 attribute 개수 확인
+        total_attributes = len(self.texts)
+        target_selection_count = per_class * self.num_classes
+
+        # 선택하려는 개수가 전체보다 많으면 제한
+        actual_selection_count = min(target_selection_count, total_attributes)
+        print(
+            f"Total attributes: {total_attributes}, Target: {target_selection_count}, Actual: {actual_selection_count}")
+
+        # attribute selection 로직
         all_atts = self.all_atts.to(self.att_embeddings.device)
         att_embeddings_norm = F.normalize(all_atts, p=2, dim=1)
         if self.use_sigmoid:
@@ -188,20 +268,35 @@ class OWCATSegHead(nn.Module):
             cosine_sim_matrix = torch.matmul(att_embeddings_norm, att_embeddings_norm.T).abs()
 
         selected_indices = []
-        for _ in range(per_class * self.num_classes):
+        for _ in range(actual_selection_count):  # ← 수정: 실제 선택 가능한 개수로 제한
             if len(selected_indices) == 0:
                 _, idx = distribution_sim.min(dim=0)
             else:
-                unselected_indices = list(set(range(len(self.texts))) - set(selected_indices))
+                unselected_indices = list(set(range(total_attributes)) - set(selected_indices))
+
+                # 빈 리스트 체크
+                if len(unselected_indices) == 0:
+                    print(f"All attributes selected. Total selected: {len(selected_indices)}")
+                    break
+
                 cosine_sim_with_selected = cosine_sim_matrix[unselected_indices][:, selected_indices].mean(dim=1)
                 distribution_sim_unselected = distribution_sim[unselected_indices]
                 score = self.alpha * distribution_sim_unselected + (1 - self.alpha) * cosine_sim_with_selected
+
+                # score가 빈 텐서인지 체크
+                if score.numel() == 0:
+                    print("Score tensor is empty, stopping selection")
+                    break
+
                 idx = unselected_indices[score.argmin()]
             selected_indices.append(idx)
 
         selected_indices = torch.tensor(selected_indices).to(self.att_embeddings.device)
         self.att_embeddings = torch.nn.Parameter(all_atts[selected_indices]).to(self.att_embeddings.device)
         self.texts = [self.texts[i] for i in selected_indices]
+
+        print(f"Attribute selection completed: selected {len(selected_indices)} attributes")
+
 
     def log_distribution(self, att_scores, gt_labels, gt_masks):
         """Log distribution of attributes for known/unknown classes."""

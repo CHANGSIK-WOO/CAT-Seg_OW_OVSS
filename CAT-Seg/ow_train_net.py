@@ -41,6 +41,65 @@ import json
 # from detectron2.evaluation import SemSegGzeroEvaluator
 # from mask_former.evaluation.sem_seg_evaluation_gzero import SemSegGzeroEvaluator
 
+
+class AttributeSelectionHook:
+    """
+    키 불일치 문제를 해결한 Hook
+    """
+
+    def __init__(self, pipline_config):
+        self.pipline = pipline_config.copy() if pipline_config else []
+
+    def before_step(self, trainer):
+        if len(self.pipline) == 0:
+            return
+
+        if self.pipline[0]['type'] == 'att_select':
+            # 카운트다운 감소 (올바른 키 사용)
+            self.pipline[0]['log_countdown'] -= 1
+
+            model = self._get_model(trainer)
+
+            if self.pipline[0]['log_countdown'] > 0:
+                # 아직 로깅 시작 전
+                if hasattr(model.sem_seg_head, 'disable_log'):
+                    model.sem_seg_head.disable_log()
+            elif self.pipline[0]['log_countdown'] == 0:
+                # 로깅 시작
+                if hasattr(model.sem_seg_head, 'enable_log'):
+                    model.sem_seg_head.enable_log()
+                    print(f"[Iter {trainer.iter}] Enabled attribute logging")
+
+    def after_step(self, trainer):
+        if len(self.pipline) == 0:
+            return
+
+        if self.pipline[0]['type'] == 'att_select':
+            # select_countdown도 감소 (올바른 키 사용)
+            self.pipline[0]['select_countdown'] -= 1
+
+            if self.pipline[0]['select_countdown'] == 0:
+                model = self._get_model(trainer)
+
+                # attribute selection 수행
+                if hasattr(model.sem_seg_head, 'select_att'):
+                    model.sem_seg_head.select_att()
+                    print(f"[Iter {trainer.iter}] Performed attribute selection")
+                if hasattr(model.sem_seg_head, 'disable_log'):
+                    model.sem_seg_head.disable_log()
+                    print(f"[Iter {trainer.iter}] Disabled attribute logging")
+
+                # pipline에서 완료된 작업 제거
+                self.pipline.pop(0)
+                print(f"[Iter {trainer.iter}] Removed completed task from pipeline")
+
+    def _get_model(self, trainer):
+        if hasattr(trainer.model, 'module'):
+            return trainer.model.module
+        else:
+            return trainer.model
+
+
 class OWSemSegEvaluator(DatasetEvaluator):
     """
     Open-World Semantic Segmentation Evaluator.
@@ -276,6 +335,48 @@ class Trainer(DefaultTrainer):
     """
     Extension of the Trainer class adapted to DETR.
     """
+    def __init__(self, cfg):
+        super().__init__(cfg)
+
+        # pipline 설정 읽기
+        if (hasattr(cfg.MODEL.SEM_SEG_HEAD, 'ATT_EMBEDDINGS') and
+                cfg.MODEL.SEM_SEG_HEAD.ATT_EMBEDDINGS is not None and
+                cfg.MODEL.SEM_SEG_HEAD.ATT_EMBEDDINGS != ""):
+
+            # Config에서 실제 설정값 읽기
+            log_start_iter = cfg.get('ATTRIBUTE_LOG_START_ITER', 50)
+            select_iter = cfg.get('ATTRIBUTE_SELECT_ITER', 80)
+
+            # pipline 설정을 동적으로 생성
+            pipline_config = [
+                {
+                    'type': 'att_select',
+                    'log_start_iter': log_start_iter,
+                    'select_iter': select_iter,
+                    'log_countdown': log_start_iter,  # 카운트다운용
+                    'select_countdown': select_iter  # 카운트다운용
+                }
+            ]
+
+            self.attribute_hook = AttributeSelectionHook(pipline_config)
+            print(f"Attribute Selection Hook enabled: log_start={log_start_iter}, select={select_iter}")
+        else:
+            self.attribute_hook = None
+            print("No attribute embeddings specified, skipping attribute selection hook")
+
+    def run_step(self):
+        """Hook을 적용한 training step"""
+        # Call hook before step (매 step마다 호출되므로 epoch 대신 step 사용)
+        if self.attribute_hook:
+            self.attribute_hook.before_step(self)
+
+        # Run the original step
+        super().run_step()
+
+        # Call hook after step
+        if self.attribute_hook:
+            self.attribute_hook.after_step(self)
+
 
     @classmethod
     def build_evaluator(cls, cfg, dataset_name, output_folder=None):
@@ -520,8 +621,8 @@ def main(args):
         if comm.is_main_process():  # 분산 학습 시 메인 프로세스에서만 저장하도록 함
             print("Saving distributions to file...")
             distributions = {
-                'positive': trainer.model.sem_seg_head.positive_distributions,
-                'negative': trainer.model.sem_seg_head.negative_distributions
+                'positive_distributions': trainer.model.sem_seg_head.positive_distributions,
+                'negative_distributions': trainer.model.sem_seg_head.negative_distributions
             }
             torch.save(distributions, cfg.MODEL.SEM_SEG_HEAD.DISTRIBUTIONS)
             print(f"Distributions saved to {cfg.MODEL.SEM_SEG_HEAD.DISTRIBUTIONS}")

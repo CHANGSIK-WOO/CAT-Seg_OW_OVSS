@@ -42,8 +42,8 @@ MODEL:
     DISTRIBUTIONS: "data/coco/distributions.pth"
     TOP_K: 10           # Top-k attributes for unknown prediction
     FUSION_ATT: False
-
   PROMPT_ENSEMBLE_TYPE: "single"
+
 INPUT:
   MIN_SIZE_TRAIN: (256, )
   MIN_SIZE_TRAIN_SAMPLING: "choice"
@@ -66,4 +66,7 @@ SOLVER:
 
 TEST:
   EVAL_PERIOD: 100 #5000->100
-  
+
+
+ATTRIBUTE_LOG_START_ITER: 50    # ← 이 값이 실제로 사용됨
+ATTRIBUTE_SELECT_ITER: 80       # ← 이 값이 실제로 사용됨

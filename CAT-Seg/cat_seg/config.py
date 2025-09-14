@@ -105,3 +105,6 @@ def add_cat_seg_config(cfg):
     cfg.MODEL.SEM_SEG_HEAD.DISTRIBUTIONS = None
     cfg.MODEL.SEM_SEG_HEAD.TOP_K = 10
     cfg.MODEL.SEM_SEG_HEAD.FUSION_ATT = False
+
+    cfg.ATTRIBUTE_LOG_START_ITER = None
+    cfg.ATTRIBUTE_SELECT_ITER = None
