@@ -39,7 +39,7 @@ MODEL:
     ALPHA: 0.3          # Alpha for attribute selection
     USE_SIGMOID: True
     PREV_DISTRIBUTION: None
-    DISTRIBUTIONS: None #"data/coco/distributions.pth"
+    DISTRIBUTIONS: "data/coco/distributions.pth"
     TOP_K: 10           # Top-k attributes for unknown prediction
     FUSION_ATT: False
 
@@ -57,7 +57,7 @@ INPUT:
   DATASET_MAPPER_NAME: "mask_former_semantic"
 
 SOLVER:
-  IMS_PER_BATCH: 2 # 4->2
+  IMS_PER_BATCH: 1 # 4->2
   LR_SCHEDULER_NAME: WarmupCosineLR
   BASE_LR: 0.0002
   MAX_ITER: 100 #80000->100

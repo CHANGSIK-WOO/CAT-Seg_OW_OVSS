@@ -86,8 +86,15 @@ class OWCATSeg(nn.Module):
         self.crop_size = crop_size
 
         # ow-ovss new
-        if self.crop_size[0] == 256: self.clip_resolution = (256, 256)  # 256/16 = 16x16 features
-        else: self.clip_resolution = (384, 384) if clip_pretrained == "ViT-B/16" else (336, 336)
+        if self.crop_size[0] == 256: # 256/16 = 16x16 features
+            self.clip_resolution = (256, 256) if clip_pretrained == "ViT-B/16" else (224, 224)
+            self.h = self.crop_size[0] // 16 if clip_pretrained == "ViT-B/16" else self.crop_size[0] // 14
+            self.w = self.crop_size[0] // 16 if clip_pretrained == "ViT-B/16" else self.crop_size[0] // 14
+        else:
+            self.clip_resolution = (384, 384) if clip_pretrained == "ViT-B/16" else (336, 336)
+            self.h = self.crop_size[0] // 16 if clip_pretrained == "ViT-B/16" else self.crop_size[0] // 14
+            self.w = self.crop_size[0] // 16 if clip_pretrained == "ViT-B/16" else self.crop_size[0] // 14
+
 
         #self.clip_resolution = (384, 384) if clip_pretrained == "ViT-B/16" else (336, 336)
 
@@ -166,11 +173,19 @@ class OWCATSeg(nn.Module):
         image_features = clip_features[:, 1:, :]
 
         # CLIP ViT features for guidance
-        res3 = rearrange(image_features, "B (H W) C -> B C H W", H=24)
-        res4 = rearrange(self.layers[0][1:, :, :], "(H W) B C -> B C H W", H=24)
+        # res3 = rearrange(image_features, "B (H W) C -> B C H W", H=24)
+        # res4 = rearrange(self.layers[0][1:, :, :], "(H W) B C -> B C H W", H=24)
+        # res4 = self.upsample1(res4)
+        # res5 = rearrange(self.layers[1][1:, :, :], "(H W) B C -> B C H W", H=24)
+        # res5 = self.upsample2(res5)
+
+        res3 = rearrange(image_features, "B (H W) C -> B C H W", H=self.h, W=self.w)
+        res4 = rearrange(self.layers[0][1:, :, :], "(H W) B C -> B C H W", H=self.h, W=self.w)
         res4 = self.upsample1(res4)
-        res5 = rearrange(self.layers[1][1:, :, :], "(H W) B C -> B C H W", H=24)
+        res5 = rearrange(self.layers[1][1:, :, :], "(H W) B C -> B C H W", H=self.h, W=self.w)
         res5 = self.upsample2(res5)
+
+
 
         features = {'res5': res5, 'res4': res4, 'res3': res3,}
 
@@ -187,14 +202,16 @@ class OWCATSeg(nn.Module):
                 # Get attribute predictions for logging
                 att_features = self.sem_seg_head.att_embeddings[None].repeat(clip_features.shape[0], 1, 1)
                 att_outputs = self.sem_seg_head.predictor(
-                    rearrange(clip_features[:, 1:, :], "b (h w) c->b c h w", h=24, w=24),
+                    rearrange(clip_features[:, 1:, :], "B (H W) C -> B C H W", H=self.h, W=self.w),
                     features,
                     None,
                     None,
                     att_features,
                     False)
                 att_outputs = F.interpolate(att_outputs, size=(targets.shape[-2], targets.shape[-1]), mode="bilinear", align_corners=False)
-                self.sem_seg_head.log_distribution(att_outputs, targets, targets != self.sem_seg_head.ignore_value)
+
+                if self.sem_seg_head.distributions is not None:
+                    self.sem_seg_head.log_distribution(att_outputs, targets, targets != self.sem_seg_head.ignore_value)
 
             num_classes = outputs.shape[1]
             mask = targets != self.sem_seg_head.ignore_value

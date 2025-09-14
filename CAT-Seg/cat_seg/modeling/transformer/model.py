@@ -657,7 +657,7 @@ class Aggregator(nn.Module):
         corr_embed = self.conv1(corr_embed)
         corr_embed = rearrange(corr_embed, '(B T) C H W -> B C T H W', B=B)
         return corr_embed
-    
+
     def corr_projection(self, x, proj):
         corr_embed = rearrange(x, 'B C T H W -> B T H W C')
         corr_embed = proj(corr_embed)

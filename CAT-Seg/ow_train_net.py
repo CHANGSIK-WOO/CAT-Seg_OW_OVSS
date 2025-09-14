@@ -512,6 +512,21 @@ def main(args):
 
     trainer = Trainer(cfg)
     trainer.resume_or_load(resume=args.resume)
+
+    res = trainer.train()  # 훈련 실행
+
+    # 👈 [수정 포인트] 아래 파일 저장 코드 블록 전체 추가
+    if cfg.MODEL.SEM_SEG_HEAD.DISTRIBUTIONS is not None:
+        if comm.is_main_process():  # 분산 학습 시 메인 프로세스에서만 저장하도록 함
+            print("Saving distributions to file...")
+            distributions = {
+                'positive': trainer.model.sem_seg_head.positive_distributions,
+                'negative': trainer.model.sem_seg_head.negative_distributions
+            }
+            torch.save(distributions, cfg.MODEL.SEM_SEG_HEAD.DISTRIBUTIONS)
+            print(f"Distributions saved to {cfg.MODEL.SEM_SEG_HEAD.DISTRIBUTIONS}")
+
+    return res
     return trainer.train()
 
 

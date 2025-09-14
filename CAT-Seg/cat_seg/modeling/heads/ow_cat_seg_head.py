@@ -30,6 +30,7 @@ class OWCATSegHead(nn.Module):
         transformer_predictor: nn.Module,
 
         #ow-ovss new
+        device="cuda",
         att_embeddings: Optional[str] = None,
         prev_intro_cls: int = 0,
         cur_intro_cls: int = 0,
@@ -57,6 +58,7 @@ class OWCATSegHead(nn.Module):
         self.feature_resolution = feature_resolution
 
         # ow-ovss new
+        self.device = device
         self.thr = thr
         self.alpha = alpha
         self.use_sigmoid = use_sigmoid
@@ -116,6 +118,7 @@ class OWCATSegHead(nn.Module):
         else:
             prev_atts_num = 0
         self.att_embeddings = torch.nn.Parameter(atts['att_embedding'].float()[prev_atts_num:])
+        self.enable_log()
         # self.att_embeddings = torch.nn.Parameter(torch.zeros(1000, 512).float())
 
     def reset_log(self, interval=0.0001):
