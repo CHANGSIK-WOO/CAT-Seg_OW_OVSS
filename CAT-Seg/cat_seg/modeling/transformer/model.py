@@ -658,11 +658,8 @@ class Aggregator(nn.Module):
     def corr_embed(self, x):
         B = x.shape[0]
         corr_embed = rearrange(x, 'B P T H W -> (B T) P H W')
-
         #ow-ovss new
         corr_embed = corr_embed.to(dtype=self.conv1.weight.dtype)
-
-
         corr_embed = self.conv1(corr_embed)
         corr_embed = rearrange(corr_embed, '(B T) C H W -> B C T H W', B=B)
         return corr_embed
