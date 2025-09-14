@@ -55,19 +55,19 @@ def register_ade20k_150_semantic_segmentation(root):
         image_dir = os.path.join(root, "images", dirname)
         gt_dir = os.path.join(root, "annotations_detectron2", dirname)
 
-        # Standard semantic segmentation dataset
-        name_standard = f"ade20k_150_{name}_sem_seg"
-        DatasetCatalog.register(
-            name_standard,
-            lambda x=image_dir, y=gt_dir: load_sem_seg(y, x, gt_ext="png", image_ext="jpg"),
-        )
-        MetadataCatalog.get(name_standard).set(
-            stuff_classes=meta["stuff_classes"],
-            stuff_dataset_id_to_contiguous_id=meta["stuff_dataset_id_to_contiguous_id"],
-            evaluator_type="sem_seg",
-            ignore_label=255,
-            **meta,
-        )
+        # # Standard semantic segmentation dataset
+        # name_standard = f"ade20k_150_{name}_sem_seg"
+        # DatasetCatalog.register(
+        #     name_standard,
+        #     lambda x=image_dir, y=gt_dir: load_sem_seg(y, x, gt_ext="png", image_ext="jpg"),
+        # )
+        # MetadataCatalog.get(name_standard).set(
+        #     stuff_classes=meta["stuff_classes"],
+        #     stuff_dataset_id_to_contiguous_id=meta["stuff_dataset_id_to_contiguous_id"],
+        #     evaluator_type="sem_seg",
+        #     ignore_label=255,
+        #     **meta,
+        # )
 
         # Open-World semantic segmentation dataset
         name_ow = f"ade20k_150_ow_{name}_sem_seg"
@@ -76,8 +76,8 @@ def register_ade20k_150_semantic_segmentation(root):
             lambda x=image_dir, y=gt_dir: load_sem_seg(y, x, gt_ext="png", image_ext="jpg"),
         )
         MetadataCatalog.get(name_ow).set(
-            stuff_classes=meta["stuff_classes"],
-            stuff_dataset_id_to_contiguous_id=meta["stuff_dataset_id_to_contiguous_id"],
+            # stuff_classes=meta["stuff_classes"],
+            # stuff_dataset_id_to_contiguous_id=meta["stuff_dataset_id_to_contiguous_id"],
             evaluator_type="ow_sem_seg",  # Use Open-World evaluator
             ignore_label=255,
             **meta,

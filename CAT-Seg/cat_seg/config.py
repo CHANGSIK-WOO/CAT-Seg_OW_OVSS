@@ -93,6 +93,7 @@ def add_cat_seg_config(cfg):
     cfg.TEST.SLIDING_WINDOW = False
 
     # ow-ovss new
+    cfg.MODEL.SEM_SEG_HEAD.EMBEDDING_PATH = None
     cfg.MODEL.SEM_SEG_HEAD.ATT_EMBEDDINGS = None
     cfg.MODEL.SEM_SEG_HEAD.PREV_INTRO_CLS = 0
     cfg.MODEL.SEM_SEG_HEAD.CUR_INTRO_CLS = 75

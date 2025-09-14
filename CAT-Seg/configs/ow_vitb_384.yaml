@@ -31,7 +31,7 @@ MODEL:
 
     #ow-ovss new
     EMBEDDING_PATH: "data/coco/cls_embeddings.npy"
-    ATT_EMBEDDINGS: "data/ade20k/att_embeddings.pth"
+    ATT_EMBEDDINGS: "data/coco/att_embeddings.pth"
     PREV_INTRO_CLS: 0    # Start of known classes
     CUR_INTRO_CLS: 75    # Start of unknown classes
     UNKNOWN_CLS: 75      # First unknown class index
@@ -39,7 +39,7 @@ MODEL:
     ALPHA: 0.3          # Alpha for attribute selection
     USE_SIGMOID: True
     PREV_DISTRIBUTION: None
-    DISTRIBUTIONS: "data/ade20k/distributions.pth"
+    DISTRIBUTIONS: None #"data/coco/distributions.pth"
     TOP_K: 10           # Top-k attributes for unknown prediction
     FUSION_ATT: False
 
@@ -57,13 +57,13 @@ INPUT:
   DATASET_MAPPER_NAME: "mask_former_semantic"
 
 SOLVER:
-  IMS_PER_BATCH: 4 
+  IMS_PER_BATCH: 4 # 4->2
   LR_SCHEDULER_NAME: WarmupCosineLR
   BASE_LR: 0.0002
-  MAX_ITER: 80000
+  MAX_ITER: 100 #80000->100
   BACKBONE_MULTIPLIER: 0.0
   CLIP_MULTIPLIER: 0.01
 
 TEST:
-  EVAL_PERIOD: 5000
+  EVAL_PERIOD: 100 #5000->100
   

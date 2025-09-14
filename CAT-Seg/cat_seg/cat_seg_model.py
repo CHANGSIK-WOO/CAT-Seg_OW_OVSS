@@ -173,7 +173,7 @@ class CATSeg(nn.Module):
             losses = {"loss_sem_seg" : loss}
             return losses
 
-        else:
+        else:    
             outputs = outputs.sigmoid()
             image_size = clip_images.image_sizes[0]
             height = batched_inputs[0].get("height", image_size[0])

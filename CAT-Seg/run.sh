@@ -1,5 +1,6 @@
 #!/bin/sh
 
+
 config=$1
 gpus=$2
 output=$3
@@ -24,6 +25,8 @@ fi
 
 shift 3
 opts=${@}
+
+export DETECTRON2_DATASETS="/data/datasets"
 
 python ow_train_net.py --config $config \
  --num-gpus $gpus \

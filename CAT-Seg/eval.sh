@@ -25,6 +25,8 @@ fi
 shift 3
 opts=${@}
 
+export DETECTRON2_DATASETS="/data/datasets"
+
 #ADE20k-150
 echo "Evaluating ADE20K-150 Open-World..."
 python train_net.py --config $config \

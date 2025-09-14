@@ -13,7 +13,7 @@ from .data.dataset_mappers.mask_former_panoptic_dataset_mapper import (
 from .data.dataset_mappers.mask_former_semantic_dataset_mapper import (
     MaskFormerSemanticDatasetMapper,
 )
-from .data.dataset_mappers.mask_former_semantic_dataset_mapper import (
+from .data.dataset_mappers.ow_mask_former_semantic_dataset_mapper import (
     OWMaskFormerSemanticDatasetMapper,
 )
 
@@ -23,4 +23,4 @@ from .test_time_augmentation import SemanticSegmentorWithTTA
 
 # ow-ovss
 from .ow_cat_seg_model import OWCATSeg
-from .cat_seg.modeling.heads.ow_cat_seg_head import OWCATSegHead
+from .modeling.heads.ow_cat_seg_head import OWCATSegHead

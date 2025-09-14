@@ -5,7 +5,8 @@ from typing import Callable, Dict, List, Optional, Tuple, Union
 from einops import rearrange
 
 import fvcore.nn.weight_init as weight_init
-from torch import nn
+import torch
+from torch import nn, Tensor
 from torch.nn import functional as F
 
 from detectron2.config import configurable
@@ -76,7 +77,7 @@ class OWCATSegHead(nn.Module):
             "ignore_value": cfg.MODEL.SEM_SEG_HEAD.IGNORE_VALUE,
             "num_classes": cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES,
             "feature_resolution": cfg.MODEL.SEM_SEG_HEAD.FEATURE_RESOLUTION,
-            "transformer_predictor": CATSegPredictor(cfg),
+            "transformer_predictor": OWCATSegPredictor(cfg),
 
             # ow-ovss new
             "att_embeddings": cfg.MODEL.SEM_SEG_HEAD.ATT_EMBEDDINGS,
