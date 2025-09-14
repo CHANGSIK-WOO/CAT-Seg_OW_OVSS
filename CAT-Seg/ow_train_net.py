@@ -37,44 +37,43 @@ import pycocotools.mask as mask_util
 
 
 import json
-from torch.nn.parallel import DistributedDataParallel
-from detectron2.engine.train_loop import AMPTrainer, SimpleTrainer, TrainerBase, HookBase
-import weakref
-from detectron2.utils.events import EventStorage
-from detectron2.utils.logger import _log_api_usage
 
 # from detectron2.evaluation import SemSegGzeroEvaluator
 # from mask_former.evaluation.sem_seg_evaluation_gzero import SemSegGzeroEvaluator
 
-class SemSegGzeroEvaluator(DatasetEvaluator):
+class OWSemSegEvaluator(DatasetEvaluator):
     """
-    Evaluate semantic segmentation metrics.
+    Open-World Semantic Segmentation Evaluator.
+    Evaluates both known (seen) and unknown (unseen) classes separately.
     """
 
     def __init__(
-        self, dataset_name, distributed, output_dir=None, *, num_classes=None, ignore_label=None
+            self, dataset_name, distributed, output_dir=None, *,
+            num_classes=None, ignore_label=None, known_classes_end=74
     ):
         """
         Args:
             dataset_name (str): name of the dataset to be evaluated.
             distributed (True): if True, will collect results from all ranks for evaluation.
-                Otherwise, will evaluate the results in the current process.
             output_dir (str): an output directory to dump results.
             num_classes, ignore_label: deprecated argument
+            known_classes_end (int): last index of known classes (0-indexed)
         """
         self._logger = logging.getLogger(__name__)
         if num_classes is not None:
             self._logger.warn(
-                "SemSegEvaluator(num_classes) is deprecated! It should be obtained from metadata."
+                "OWSemSegEvaluator(num_classes) is deprecated! It should be obtained from metadata."
             )
         if ignore_label is not None:
             self._logger.warn(
-                "SemSegEvaluator(ignore_label) is deprecated! It should be obtained from metadata."
+                "OWSemSegEvaluator(ignore_label) is deprecated! It should be obtained from metadata."
             )
+
         self._dataset_name = dataset_name
         self._distributed = distributed
         self._output_dir = output_dir
         self._cpu_device = torch.device("cpu")
+        self._known_classes_end = known_classes_end
 
         self.input_file_to_gt_file = {
             dataset_record["file_name"]: dataset_record["sem_seg_file_name"]
@@ -88,12 +87,20 @@ class SemSegGzeroEvaluator(DatasetEvaluator):
             self._contiguous_id_to_dataset_id = {v: k for k, v in c2d.items()}
         except AttributeError:
             self._contiguous_id_to_dataset_id = None
+
         self._class_names = meta.stuff_classes
-        self._val_extra_classes = meta.val_extra_classes
         self._num_classes = len(meta.stuff_classes)
         if num_classes is not None:
             assert self._num_classes == num_classes, f"{self._num_classes} != {num_classes}"
         self._ignore_label = ignore_label if ignore_label is not None else meta.ignore_label
+
+        # Split classes into known and unknown
+        self._known_classes = list(range(self._known_classes_end + 1))  # 0-74
+        self._unknown_classes = list(range(self._known_classes_end + 1, self._num_classes))  # 75-149
+
+        self._logger.info(f"Known classes: {len(self._known_classes)} (0-{self._known_classes_end})")
+        self._logger.info(
+            f"Unknown classes: {len(self._unknown_classes)} ({self._known_classes_end + 1}-{self._num_classes - 1})")
 
     def reset(self):
         self._conf_matrix = np.zeros((self._num_classes + 1, self._num_classes + 1), dtype=np.int64)
@@ -103,15 +110,12 @@ class SemSegGzeroEvaluator(DatasetEvaluator):
         """
         Args:
             inputs: the inputs to a model.
-                It is a list of dicts. Each dict corresponds to an image and
-                contains keys like "height", "width", "file_name".
-            outputs: the outputs of a model. It is either list of semantic segmentation predictions
-                (Tensor [H, W]) or list of dicts with key "sem_seg" that contains semantic
-                segmentation prediction in the same format.
+            outputs: the outputs of a model.
         """
         for input, output in zip(inputs, outputs):
             output = output["sem_seg"].argmax(dim=0).to(self._cpu_device)
             pred = np.array(output, dtype=np.int)
+
             with PathManager.open(self.input_file_to_gt_file[input["file_name"]], "rb") as f:
                 gt = np.array(Image.open(f), dtype=np.int)
 
@@ -126,12 +130,7 @@ class SemSegGzeroEvaluator(DatasetEvaluator):
 
     def evaluate(self):
         """
-        Evaluates standard semantic segmentation metrics (http://cocodataset.org/#stuff-eval):
-
-        * Mean intersection-over-union averaged across classes (mIoU)
-        * Frequency Weighted IoU (fwIoU)
-        * Mean pixel accuracy averaged across classes (mACC)
-        * Pixel Accuracy (pACC)
+        Evaluates standard semantic segmentation metrics with separation for known/unknown classes.
         """
         if self._distributed:
             synchronize()
@@ -151,6 +150,7 @@ class SemSegGzeroEvaluator(DatasetEvaluator):
             with PathManager.open(file_path, "w") as f:
                 f.write(json.dumps(self._predictions))
 
+        # Calculate metrics for all classes
         acc = np.full(self._num_classes, np.nan, dtype=np.float)
         iou = np.full(self._num_classes, np.nan, dtype=np.float)
         tp = self._conf_matrix.diagonal()[:-1].astype(np.float)
@@ -161,60 +161,67 @@ class SemSegGzeroEvaluator(DatasetEvaluator):
         acc[acc_valid] = tp[acc_valid] / pos_gt[acc_valid]
         iou_valid = (pos_gt + pos_pred) > 0
         union = pos_gt + pos_pred - tp
-        iou[acc_valid] = tp[acc_valid] / union[acc_valid]
+        iou[iou_valid] = tp[iou_valid] / union[iou_valid]
+
+        # Overall metrics
         macc = np.sum(acc[acc_valid]) / np.sum(acc_valid)
-        miou = np.sum(iou[acc_valid]) / np.sum(iou_valid)
+        miou = np.sum(iou[iou_valid]) / np.sum(iou_valid)
         fiou = np.sum(iou[acc_valid] * class_weights[acc_valid])
         pacc = np.sum(tp) / np.sum(pos_gt)
-        seen_IoU = 0
-        unseen_IoU = 0
-        seen_acc = 0
-        unseen_acc = 0
+
+        # Separate metrics for known and unknown classes
+        known_valid = np.array([i in self._known_classes for i in range(self._num_classes)]) & iou_valid
+        unknown_valid = np.array([i in self._unknown_classes for i in range(self._num_classes)]) & iou_valid
+
+        known_miou = np.sum(iou[known_valid]) / np.sum(known_valid) if np.sum(known_valid) > 0 else 0.0
+        unknown_miou = np.sum(iou[unknown_valid]) / np.sum(unknown_valid) if np.sum(unknown_valid) > 0 else 0.0
+
+        # Harmonic mean
+        if known_miou > 0 and unknown_miou > 0:
+            harmonic_mean = 2 * known_miou * unknown_miou / (known_miou + unknown_miou)
+        else:
+            harmonic_mean = 0.0
+
+        # Build results
         res = {}
         res["mIoU"] = 100 * miou
         res["fwIoU"] = 100 * fiou
-        for i, name in enumerate(self._class_names):
-            res["IoU-{}".format(name)] = 100 * iou[i]
-            if name in self._val_extra_classes:
-                unseen_IoU = unseen_IoU + 100 * iou[i]
-            else:
-                seen_IoU = seen_IoU + 100 * iou[i]
-        unseen_IoU = unseen_IoU / len(self._val_extra_classes)
-        seen_IoU = seen_IoU / (self._num_classes - len(self._val_extra_classes))
         res["mACC"] = 100 * macc
         res["pACC"] = 100 * pacc
+
+        # Open-World specific metrics
+        res["Known_mIoU"] = 100 * known_miou
+        res["Unknown_mIoU"] = 100 * unknown_miou
+        res["Harmonic_Mean"] = 100 * harmonic_mean
+
+        # Per-class IoU and ACC
         for i, name in enumerate(self._class_names):
+            res["IoU-{}".format(name)] = 100 * iou[i]
             res["ACC-{}".format(name)] = 100 * acc[i]
-            if name in self._val_extra_classes:
-                unseen_acc = unseen_acc + 100 * iou[i]
-            else:
-                seen_acc = seen_acc + 100 * iou[i]
-        unseen_acc = unseen_acc / len(self._val_extra_classes)
-        seen_acc = seen_acc / (self._num_classes - len(self._val_extra_classes))
-        res["seen_IoU"] = seen_IoU
-        res["unseen_IoU"] = unseen_IoU
-        res["harmonic mean"] = 2 * seen_IoU * unseen_IoU / (seen_IoU + unseen_IoU)
-        # res["unseen_acc"] = unseen_acc
-        # res["seen_acc"] = seen_acc
+
         if self._output_dir:
             file_path = os.path.join(self._output_dir, "sem_seg_evaluation.pth")
             with PathManager.open(file_path, "wb") as f:
                 torch.save(res, f)
+
         results = OrderedDict({"sem_seg": res})
+        self._logger.info("=== Open-World Semantic Segmentation Results ===")
+        self._logger.info(f"Overall mIoU: {res['mIoU']:.2f}")
+        self._logger.info(f"Known Classes mIoU: {res['Known_mIoU']:.2f}")
+        self._logger.info(f"Unknown Classes mIoU: {res['Unknown_mIoU']:.2f}")
+        self._logger.info(f"Harmonic Mean: {res['Harmonic_Mean']:.2f}")
         self._logger.info(results)
         return results
 
     def encode_json_sem_seg(self, sem_seg, input_file_name):
         """
         Convert semantic segmentation to COCO stuff format with segments encoded as RLEs.
-        See http://cocodataset.org/#format-results
         """
         json_list = []
         for label in np.unique(sem_seg):
             if self._contiguous_id_to_dataset_id is not None:
-                # import ipdb; ipdb.set_trace()
                 assert (
-                    label in self._contiguous_id_to_dataset_id
+                        label in self._contiguous_id_to_dataset_id
                 ), "Label {} is not in the metadata info for {}".format(label, self._dataset_name)
                 dataset_id = self._contiguous_id_to_dataset_id[label]
             else:
@@ -228,78 +235,47 @@ class SemSegGzeroEvaluator(DatasetEvaluator):
         return json_list
 
 
+class VOCbEvaluator(SemSegEvaluator):
+    """
+    Evaluate semantic segmentation metrics for VOC background dataset.
+    """
+
+    def process(self, inputs, outputs):
+        """
+        Args:
+            inputs: the inputs to a model.
+            outputs: the outputs of a model.
+        """
+        for input, output in zip(inputs, outputs):
+            output = output["sem_seg"].argmax(dim=0).to(self._cpu_device)
+            pred = np.array(output, dtype=np.int)
+            pred[pred >= 20] = 20  # Clip predictions to 20 classes
+            with PathManager.open(self.input_file_to_gt_file[input["file_name"]], "rb") as f:
+                gt = np.array(Image.open(f), dtype=np.int)
+
+            gt[gt == self._ignore_label] = self._num_classes
+
+            self._conf_matrix += np.bincount(
+                (self._num_classes + 1) * pred.reshape(-1) + gt.reshape(-1),
+                minlength=self._conf_matrix.size,
+            ).reshape(self._conf_matrix.shape)
+
+            self._predictions.extend(self.encode_json_sem_seg(pred, input["file_name"]))
 # MaskFormer
 from cat_seg import (
     DETRPanopticDatasetMapper,
     MaskFormerPanopticDatasetMapper,
     MaskFormerSemanticDatasetMapper,
+    OWMaskFormerSemanticDatasetMapper,
     SemanticSegmentorWithTTA,
-    add_mask_former_config,
+    add_cat_seg_config,
 )
 
-
-def create_ddp_model(model, *, fp16_compression=False, **kwargs):
-    """
-    Create a DistributedDataParallel model if there are >1 processes.
-
-    Args:
-        model: a torch.nn.Module
-        fp16_compression: add fp16 compression hooks to the ddp object.
-            See more at https://pytorch.org/docs/stable/ddp_comm_hooks.html#torch.distributed.algorithms.ddp_comm_hooks.default_hooks.fp16_compress_hook
-        kwargs: other arguments of :module:`torch.nn.parallel.DistributedDataParallel`.
-    """  # noqa
-    if comm.get_world_size() == 1:
-        return model
-    if "device_ids" not in kwargs:
-        kwargs["device_ids"] = [comm.get_local_rank()]
-    ddp = DistributedDataParallel(model, **kwargs)
-    if fp16_compression:
-        from torch.distributed.algorithms.ddp_comm_hooks import default as comm_hooks
-
-        ddp.register_comm_hook(state=None, hook=comm_hooks.fp16_compress_hook)
-    return ddp
 
 class Trainer(DefaultTrainer):
     """
     Extension of the Trainer class adapted to DETR.
     """
-
-    def __init__(self, cfg):
-        # super().__init__(cfg)
-        self._hooks: List[HookBase] = []
-        self.iter: int = 0
-        self.start_iter: int = 0
-        self.max_iter: int
-        self.storage: EventStorage
-        _log_api_usage("trainer." + self.__class__.__name__)
-
-        logger = logging.getLogger("detectron2")
-        if not logger.isEnabledFor(logging.INFO):  # setup_logger is not called for d2
-            setup_logger()
-        cfg = DefaultTrainer.auto_scale_workers(cfg, comm.get_world_size())
-
-        # Assume these objects must be constructed in this order.
-        model = self.build_model(cfg)
-        optimizer = self.build_optimizer(cfg, model)
-        data_loader = self.build_train_loader(cfg)
-
-        model = create_ddp_model(model, broadcast_buffers=False,    find_unused_parameters=True)
-        self._trainer = (AMPTrainer if cfg.SOLVER.AMP.ENABLED else SimpleTrainer)(
-            model, data_loader, optimizer
-        )
-
-        self.scheduler = self.build_lr_scheduler(cfg, optimizer)
-        self.checkpointer = DetectionCheckpointer(
-            # Assume you want to save checkpoints together with logs/statistics
-            model,
-            cfg.OUTPUT_DIR,
-            trainer=weakref.proxy(self),
-        )
-        self.start_iter = 0
-        self.max_iter = cfg.SOLVER.MAX_ITER
-        self.cfg = cfg
-
-        self.register_hooks(self.build_hooks())
 
     @classmethod
     def build_evaluator(cls, cfg, dataset_name, output_folder=None):
@@ -314,6 +290,18 @@ class Trainer(DefaultTrainer):
             output_folder = os.path.join(cfg.OUTPUT_DIR, "inference")
         evaluator_list = []
         evaluator_type = MetadataCatalog.get(dataset_name).evaluator_type
+
+        # Open-World Semantic Segmentation evaluator
+        if evaluator_type == "ow_sem_seg":
+            evaluator_list.append(
+                OWSemSegEvaluator(
+                    dataset_name,
+                    distributed=True,
+                    output_dir=output_folder,
+                    known_classes_end=cfg.MODEL.SEM_SEG_HEAD.UNKNOWN_CLS - 1,  # UNKNOWN_CLS is the first unknown class
+                )
+            )
+
         if evaluator_type in ["sem_seg", "ade20k_panoptic_seg"]:
             evaluator_list.append(
                 SemSegEvaluator(
@@ -322,11 +310,10 @@ class Trainer(DefaultTrainer):
                     output_dir=output_folder,
                 )
             )
-        # import pdb; pdb.set_trace()
-        if evaluator_type == "sem_seg_gzero":
 
+        if evaluator_type == "sem_seg_background":
             evaluator_list.append(
-                SemSegGzeroEvaluator(
+                VOCbEvaluator(
                     dataset_name,
                     distributed=True,
                     output_dir=output_folder,
@@ -413,6 +400,8 @@ class Trainer(DefaultTrainer):
 
         params: List[Dict[str, Any]] = []
         memo: Set[torch.nn.parameter.Parameter] = set()
+        # import ipdb;
+        # ipdb.set_trace()
         for module_name, module in model.named_modules():
             for module_param_name, value in module.named_parameters(recurse=False):
                 if not value.requires_grad:
@@ -421,10 +410,13 @@ class Trainer(DefaultTrainer):
                 if value in memo:
                     continue
                 memo.add(value)
-
                 hyperparams = copy.copy(defaults)
                 if "backbone" in module_name:
                     hyperparams["lr"] = hyperparams["lr"] * cfg.SOLVER.BACKBONE_MULTIPLIER
+                if "clip_model" in module_name:
+                    hyperparams["lr"] = hyperparams["lr"] * cfg.SOLVER.CLIP_MULTIPLIER
+                # for deformable detr
+
                 if (
                     "relative_position_bias_table" in module_param_name
                     or "absolute_pos_embed" in module_param_name
@@ -493,7 +485,7 @@ def setup(args):
     cfg = get_cfg()
     # for poly lr schedule
     add_deeplab_config(cfg)
-    add_mask_former_config(cfg)
+    add_cat_seg_config(cfg)
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
     cfg.freeze()
@@ -505,7 +497,7 @@ def setup(args):
 
 def main(args):
     cfg = setup(args)
-
+    torch.set_float32_matmul_precision("high")
     if args.eval_only:
         model = Trainer.build_model(cfg)
         DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(

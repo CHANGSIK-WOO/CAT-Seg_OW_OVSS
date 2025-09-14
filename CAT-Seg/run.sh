@@ -25,11 +25,11 @@ fi
 shift 3
 opts=${@}
 
-python train_net.py --config $config \
+python ow_train_net.py --config $config \
  --num-gpus $gpus \
  --dist-url "auto" \
  --resume \
  OUTPUT_DIR $output \
  $opts
 
-sh eval.sh $config $gpus $output $opts
+#sh ow_eval.sh $config $gpus $output $opts

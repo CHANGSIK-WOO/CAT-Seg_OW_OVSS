@@ -31,16 +31,16 @@ MODEL:
 
     #ow-ovss new
     EMBEDDING_PATH: "data/coco/cls_embeddings.npy"
-    ATT_EMBEDDINGS: "data/coco/att_embeddings.pth"
-    PREV_INTRO_CLS: 0
-    CUR_INTRO_CLS: 75
-    UNKNOWN_CLS: 75
-    THR: 0.75
-    ALPHA: 0.3
+    ATT_EMBEDDINGS: "data/ade20k/att_embeddings.pth"
+    PREV_INTRO_CLS: 0    # Start of known classes
+    CUR_INTRO_CLS: 75    # Start of unknown classes
+    UNKNOWN_CLS: 75      # First unknown class index
+    THR: 0.75           # Threshold for attribute prediction
+    ALPHA: 0.3          # Alpha for attribute selection
     USE_SIGMOID: True
     PREV_DISTRIBUTION: None
-    DISTRIBUTIONS: "data/coco/distributions.pth"
-    TOP_K: 10
+    DISTRIBUTIONS: "data/ade20k/distributions.pth"
+    TOP_K: 10           # Top-k attributes for unknown prediction
     FUSION_ATT: False
 
   PROMPT_ENSEMBLE_TYPE: "single"

@@ -26,6 +26,20 @@ shift 3
 opts=${@}
 
 #ADE20k-150
+echo "Evaluating ADE20K-150 Open-World..."
+python train_net.py --config $config \
+ --num-gpus $gpus \
+ --dist-url "auto" \
+ --eval-only \
+ OUTPUT_DIR $output/eval \
+ MODEL.SEM_SEG_HEAD.TEST_CLASS_JSON "datasets/ade150.json" \
+ DATASETS.TEST \(\"ade20k_150_ow_val_sem_seg\"\,\) \
+ TEST.SLIDING_WINDOW "True" \
+ MODEL.SEM_SEG_HEAD.POOLING_SIZES "[1,1]" \
+ MODEL.WEIGHTS $output/model_final.pth \
+ $opts
+
+#ADE20k-150
 python train_net.py --config $config \
  --num-gpus $gpus \
  --dist-url "auto" \
