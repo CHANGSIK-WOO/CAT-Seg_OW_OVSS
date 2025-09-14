@@ -30,7 +30,7 @@ class CATSegPredictor(nn.Module):
         text_guidance_proj_dim: int,
         appearance_guidance_dim: int,
         appearance_guidance_proj_dim: int,
-        prompt_depth: int,
+        prompt_depth: int,q
         prompt_length: int,
         decoder_dims: list,
         decoder_guidance_dims: list,
