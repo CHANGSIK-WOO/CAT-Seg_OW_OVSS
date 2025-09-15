@@ -95,6 +95,11 @@ class OWCATSegHead(nn.Module):
             "fusion_att": cfg.MODEL.SEM_SEG_HEAD.FUSION_ATT,
         }
 
+    @property
+    def clip_dtype(self):
+        """CLIP 모델의 dtype을 자동으로 감지"""
+        return next(self.predictor.clip_model.parameters()).dtype
+
     def disable_log(self):
         self.positive_distributions = None
         self.negative_distributions = None
@@ -111,13 +116,13 @@ class OWCATSegHead(nn.Module):
             return
         atts = torch.load(att_embeddings)
         self.texts = atts['att_text']
-        self.all_atts = atts['att_embedding']
+        self.all_atts = atts['att_embedding'].to(dtype=self.clip_dtype)
         if self.prev_distribution is not None:
             # todo this
             prev_atts_num = len(torch.load(self.prev_distribution, map_location='cuda')['positive_distributions'][self.thrs.index(self.thr)])
         else:
             prev_atts_num = 0
-        self.att_embeddings = torch.nn.Parameter(atts['att_embedding'].float()[prev_atts_num:])
+        self.att_embeddings = torch.nn.Parameter(atts['att_embedding'].to(dtype=self.clip_dtype)[prev_atts_num:])
         self.enable_log()
         # self.att_embeddings = torch.nn.Parameter(torch.zeros(1000, 512).float())
 

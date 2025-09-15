@@ -160,6 +160,46 @@ class OWCATSegPredictor(nn.Module):
 
         return ret
 
+    # def forward(self, x, vis_guidance, prompt=None, gt_cls=None, att_embeddings=None, fusion_att=False):
+    #     vis = [vis_guidance[k] for k in vis_guidance.keys()][::-1]
+    #     text = self.class_texts if self.training else self.test_class_texts
+    #     text = [text[c] for c in gt_cls] if gt_cls is not None else text
+    #     text = self.get_text_embeds(text, self.prompt_templates, self.clip_model, prompt)
+    #
+    #     text = text.repeat(x.shape[0], 1, 1, 1)
+    #
+    #     # Get known class predictions
+    #     known_logits = self.transformer(x, text, vis)
+    #
+    #     # Handle attribute embeddings for unknown prediction
+    #     if att_embeddings is not None and not self.training:
+    #         # Process attribute embeddings
+    #         if fusion_att:
+    #             # Fusion mode: attributes are already in text features
+    #             num_att = att_embeddings.shape[0]
+    #             att_text = text[:, -num_att:, :, :]
+    #             text = text[:, :-num_att, :, :]
+    #         else:
+    #             # Separate mode: encode attributes separately
+    #             att_text = self.get_text_embeds(
+    #                 ["attribute"] * att_embeddings.shape[0],  # Dummy text for attributes
+    #                 self.prompt_templates,
+    #                 self.clip_model,
+    #                 None
+    #             )
+    #             # Replace with actual attribute embeddings
+    #             att_text = att_embeddings[None].repeat(x.shape[0], 1, 1, 1)
+    #
+    #         # Get attribute predictions
+    #         att_logits = self.transformer(x, att_text, vis)
+    #
+    #         # Combine known and unknown predictions
+    #         combined_logits = self.predict_unknown(known_logits, att_logits)
+    #
+    #         return combined_logits
+    #
+    #     return known_logits
+
     def forward(self, x, vis_guidance, prompt=None, gt_cls=None, att_embeddings=None, fusion_att=False):
         vis = [vis_guidance[k] for k in vis_guidance.keys()][::-1]
         text = self.class_texts if self.training else self.test_class_texts
@@ -181,14 +221,16 @@ class OWCATSegPredictor(nn.Module):
                 text = text[:, :-num_att, :, :]
             else:
                 # Separate mode: encode attributes separately
-                att_text = self.get_text_embeds(
-                    ["attribute"] * att_embeddings.shape[0],  # Dummy text for attributes
-                    self.prompt_templates,
-                    self.clip_model,
-                    None
-                )
-                # Replace with actual attribute embeddings
-                att_text = att_embeddings[None].repeat(x.shape[0], 1, 1, 1)
+                # *** 수정된 부분 ***
+                # att_embeddings.shape = [1711, 512]
+                # 이를 올바른 형태로 변환: [B, T, P, C]
+                B = x.shape[0]
+                num_att = att_embeddings.shape[0]  # 1711
+                embed_dim = att_embeddings.shape[1]  # 512
+
+                # [1711, 512] -> [B, 1711, 1, 512] 형태로 변환
+                att_text = att_embeddings.unsqueeze(0).unsqueeze(2)  # [1, 1711, 1, 512]
+                att_text = att_text.repeat(B, 1, 1, 1)  # [B, 1711, 1, 512]
 
             # Get attribute predictions
             att_logits = self.transformer(x, att_text, vis)

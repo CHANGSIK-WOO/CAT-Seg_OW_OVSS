@@ -455,6 +455,9 @@ class Trainer(DefaultTrainer):
 
     @classmethod
     def build_train_loader(cls, cfg):
+        # OW-Semantic segmentation dataset mapper
+        if cfg.INPUT.DATASET_MAPPER_NAME == "ow_mask_former_semantic":
+            mapper = OWMaskFormerSemanticDatasetMapper(cfg, True)
         # Semantic segmentation dataset mapper
         if cfg.INPUT.DATASET_MAPPER_NAME == "mask_former_semantic":
             mapper = MaskFormerSemanticDatasetMapper(cfg, True)

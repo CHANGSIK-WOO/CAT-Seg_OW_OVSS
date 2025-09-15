@@ -648,10 +648,6 @@ class Aggregator(nn.Module):
     def correlation(self, img_feats, text_feats):
         img_feats = F.normalize(img_feats, dim=1) # B C H W
         text_feats = F.normalize(text_feats, dim=-1) # B T P C
-
-        # ow-ovss new : 이미지를 텍스트 정밀도에 맞추기
-        img_feats = img_feats.to(dtype=text_feats.dtype)  # float16 → float32
-
         corr = torch.einsum('bchw, btpc -> bpthw', img_feats, text_feats)
         return corr
 
@@ -659,7 +655,7 @@ class Aggregator(nn.Module):
         B = x.shape[0]
         corr_embed = rearrange(x, 'B P T H W -> (B T) P H W')
         #ow-ovss new
-        corr_embed = corr_embed.to(dtype=self.conv1.weight.dtype)
+        # corr_embed = corr_embed.to(dtype=self.conv1.weight.dtype)
         corr_embed = self.conv1(corr_embed)
         corr_embed = rearrange(corr_embed, '(B T) C H W -> B C T H W', B=B)
         return corr_embed

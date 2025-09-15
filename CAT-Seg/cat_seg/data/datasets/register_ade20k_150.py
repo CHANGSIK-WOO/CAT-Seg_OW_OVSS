@@ -22,7 +22,7 @@ def register_ade20k_150(root):
         gt_dir = os.path.join(root, sem_seg_dirname)
         name = f"ade20k_150_{name}_sem_seg"
         DatasetCatalog.register(name, lambda x=image_dir, y=gt_dir: load_sem_seg(y, x, gt_ext='png', image_ext='jpg'))
-        MetadataCatalog.get(name).set(image_root=image_dir, seg_seg_root=gt_dir, evaluator_type="sem_seg", ignore_label=255, **meta,)
+        MetadataCatalog.get(name).set(image_root=image_dir, seg_seg_root=gt_dir, evaluator_type="ow_sem_seg", ignore_label=255, **meta,)
 
 _root = os.getenv("DETECTRON2_DATASETS", "datasets")
 register_ade20k_150(_root)
