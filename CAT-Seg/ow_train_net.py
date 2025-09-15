@@ -108,7 +108,7 @@ class OWSemSegEvaluator(DatasetEvaluator):
 
     def __init__(
             self, dataset_name, distributed, output_dir=None, *,
-            num_classes=None, ignore_label=None, known_classes_end=74
+            num_classes=None, ignore_label=None, known_classes_end=75
     ):
         """
         Args:
@@ -154,15 +154,15 @@ class OWSemSegEvaluator(DatasetEvaluator):
         self._ignore_label = ignore_label if ignore_label is not None else meta.ignore_label
 
         # Split classes into known and unknown
-        self._known_classes = list(range(self._known_classes_end + 1))  # 0-74
-        self._unknown_classes = list(range(self._known_classes_end + 1, self._num_classes))  # 75-149
+        self._known_classes = list(range(self._known_classes_end))  # 0-74
+        self._unknown_classes = list(range(self._known_classes_end, self._num_classes))  # 75-149
 
         self._logger.info(f"Known classes: {len(self._known_classes)} (0-{self._known_classes_end})")
         self._logger.info(
-            f"Unknown classes: {len(self._unknown_classes)} ({self._known_classes_end + 1}-{self._num_classes - 1})")
+            f"Unknown classes: {len(self._unknown_classes)} ({self._known_classes_end}-{self._num_classes - 1})")
 
     def reset(self):
-        self._conf_matrix = np.zeros((self._num_classes + 1, self._num_classes + 1), dtype=np.int64)
+        self._conf_matrix = np.zeros((self._num_classes, self._num_classes), dtype=np.int64)
         self._predictions = []
 
     def process(self, inputs, outputs):
@@ -180,8 +180,13 @@ class OWSemSegEvaluator(DatasetEvaluator):
 
             gt[gt == self._ignore_label] = self._num_classes
 
+            print("[DEBUG] K:", self._num_classes)  # 기대: 151
+            print("[DEBUG] gt.min/max:", int(gt.min()), int(gt.max()))
+            print("[DEBUG] pred.min/max:", int(pred.min()), int(pred.max()))
+            print("[DEBUG] uniq(gt) tail:", sorted(np.unique(gt))[-10:])
+
             self._conf_matrix += np.bincount(
-                (self._num_classes + 1) * pred.reshape(-1) + gt.reshape(-1),
+                (self._num_classes) * pred.reshape(-1) + gt.reshape(-1),
                 minlength=self._conf_matrix.size,
             ).reshape(self._conf_matrix.shape)
 
@@ -210,12 +215,12 @@ class OWSemSegEvaluator(DatasetEvaluator):
                 f.write(json.dumps(self._predictions))
 
         # Calculate metrics for all classes
-        acc = np.full(self._num_classes, np.nan, dtype=np.float)
-        iou = np.full(self._num_classes, np.nan, dtype=np.float)
-        tp = self._conf_matrix.diagonal()[:-1].astype(np.float)
-        pos_gt = np.sum(self._conf_matrix[:-1, :-1], axis=0).astype(np.float)
+        acc = np.full(self._num_classes, np.nan, dtype=float)
+        iou = np.full(self._num_classes, np.nan, dtype=float)
+        tp = self._conf_matrix.diagonal()[:-1].astype(float)
+        pos_gt = np.sum(self._conf_matrix[:-1, :-1], axis=0).astype(float)
         class_weights = pos_gt / np.sum(pos_gt)
-        pos_pred = np.sum(self._conf_matrix[:-1, :-1], axis=1).astype(np.float)
+        pos_pred = np.sum(self._conf_matrix[:-1, :-1], axis=1).astype(float)
         acc_valid = pos_gt > 0
         acc[acc_valid] = tp[acc_valid] / pos_gt[acc_valid]
         iou_valid = (pos_gt + pos_pred) > 0

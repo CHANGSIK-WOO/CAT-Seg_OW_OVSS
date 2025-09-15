@@ -254,9 +254,9 @@ class OWCATSeg(nn.Module):
         
         self.layers = []
         clip_features = self.sem_seg_head.predictor.clip_model.encode_image(clip_images, dense=True)
-        res3 = rearrange(clip_features[:, 1:, :], "B (H W) C -> B C H W", H=24)
-        res4 = self.upsample1(rearrange(self.layers[0][1:, :, :], "(H W) B C -> B C H W", H=24))
-        res5 = self.upsample2(rearrange(self.layers[1][1:, :, :], "(H W) B C -> B C H W", H=24))
+        res3 = rearrange(clip_features[:, 1:, :], "B (H W) C -> B C H W", H=self.h, W=self.w)
+        res4 = self.upsample1(rearrange(self.layers[0][1:, :, :], "(H W) B C -> B C H W", H=self.h, W=self.w))
+        res5 = self.upsample2(rearrange(self.layers[1][1:, :, :], "(H W) B C -> B C H W", H=self.h, W=self.w))
 
         features = {'res5': res5, 'res4': res4, 'res3': res3,}
         outputs = self.sem_seg_head(clip_features, features)
