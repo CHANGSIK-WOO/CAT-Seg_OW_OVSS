@@ -186,7 +186,7 @@ class OWSemSegEvaluator(DatasetEvaluator):
             print("[DEBUG] uniq(gt) tail:", sorted(np.unique(gt))[-10:])
 
             self._conf_matrix += np.bincount(
-                (self._num_classes) * pred.reshape(-1) + gt.reshape(-1),
+                (self._num_classes + 1) * pred.reshape(-1) + gt.reshape(-1),
                 minlength=self._conf_matrix.size,
             ).reshape(self._conf_matrix.shape)
 
