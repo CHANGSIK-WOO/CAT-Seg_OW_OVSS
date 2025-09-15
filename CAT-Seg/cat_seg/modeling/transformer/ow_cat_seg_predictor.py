@@ -46,6 +46,9 @@ class OWCATSegPredictor(nn.Module):
         # ow-ovdd new
         unknown_cls: int = 75,
         top_k: int = 10,
+        num_classes_train: int = 170,
+        num_classes_test: int = 151,  # NEW: Total number of classes (150 ADE20K + 1 unknown)
+
     ):
         """
         Args:
@@ -101,6 +104,8 @@ class OWCATSegPredictor(nn.Module):
         # OW-OVD specific
         self.unknown_cls = unknown_cls
         self.top_k = top_k
+        self.num_classes_train = num_classes_train
+        self.num_classes_test = num_classes_test
 
         transformer = Aggregator(
             text_guidance_dim=text_guidance_dim,
@@ -157,6 +162,8 @@ class OWCATSegPredictor(nn.Module):
         # OW-OVD parameters
         ret["unknown_cls"] = cfg.MODEL.SEM_SEG_HEAD.UNKNOWN_CLS
         ret["top_k"] = cfg.MODEL.SEM_SEG_HEAD.TOP_K
+        ret["num_classes_train"] = cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES_TRAIN
+        ret["num_classes_test"] = cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES_TEST
 
         return ret
 
@@ -203,6 +210,8 @@ class OWCATSegPredictor(nn.Module):
     def forward(self, x, vis_guidance, prompt=None, gt_cls=None, att_embeddings=None, fusion_att=False):
         vis = [vis_guidance[k] for k in vis_guidance.keys()][::-1]
         text = self.class_texts if self.training else self.test_class_texts
+        known_text = text[:self.unknown_cls]  # Only use classes 0-74
+
         text = [text[c] for c in gt_cls] if gt_cls is not None else text
         text = self.get_text_embeds(text, self.prompt_templates, self.clip_model, prompt)
 
@@ -241,6 +250,34 @@ class OWCATSegPredictor(nn.Module):
             return combined_logits
 
         return known_logits
+
+    def forward_evaluation(self, x, vis, prompt, gt_cls, att_embeddings, enable_ow_mode, num_classes_test):
+        """
+        Evaluation mode: ADE20K-style output with 151 classes
+        """
+        # Use only known classes (0-74) from ADE20K
+        known_text = self.test_class_texts[:self.unknown_cls]  # ADE20K 0-74번만
+        text = [known_text[c] for c in gt_cls] if gt_cls is not None else known_text
+        text_embeddings = self.get_text_embeds(text, self.prompt_templates, self.clip_model, prompt)
+        text_embeddings = text_embeddings.repeat(x.shape[0], 1, 1, 1)
+
+        # Get known class predictions (0-74)
+        known_logits = self.transformer(x, text_embeddings, vis)  # [B, 75, H, W]
+        B, _, H, W = known_logits.shape
+
+        if enable_ow_mode and att_embeddings is not None:
+            # OW Mode: Use attributes to predict unknown class
+            att_text = att_embeddings.unsqueeze(0).unsqueeze(2).repeat(B, 1, 1, 1)
+            att_logits = self.transformer(x, att_text, vis)  # [B, 1711, H, W]
+            combined_logits = self.predict_unknown_for_evaluation(known_logits, att_logits)
+            return combined_logits  # [B, 151, H, W]
+        else:
+            # Baseline Mode: Fill remaining classes with low scores
+            unknown_padding = torch.full((B, 75, H, W), -100.0, device=known_logits.device, dtype=known_logits.dtype)
+            final_unknown = torch.full((B, 1, H, W), -100.0, device=known_logits.device, dtype=known_logits.dtype)
+            baseline_logits = torch.cat([known_logits, unknown_padding, final_unknown], dim=1)  # [B, 151, H, W]
+            return baseline_logits
+
 
     @torch.no_grad()
     def class_embeddings(self, classnames, templates, clip_model):
@@ -317,7 +354,16 @@ class OWCATSegPredictor(nn.Module):
         return weighted_average
 
     def predict_unknown(self, known_logits, unknown_logits):
-        """Predict unknown class scores using attribute embeddings."""
+        """
+        Predict unknown class scores for OW evaluation.
+
+        Args:
+            known_logits: [B, 75, H, W] - predictions for known classes (0-74)
+            unknown_logits: [B, 1711, H, W] - attribute predictions
+
+        Returns:
+            combined_logits: [B, 151, H, W] - 75 known + 75 unknown padding + 1 unknown class
+        """
         B, C_known, H, W = known_logits.shape
 
         # Apply sigmoid to get probabilities

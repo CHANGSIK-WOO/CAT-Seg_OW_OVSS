@@ -23,7 +23,8 @@ class OWCATSegHead(nn.Module):
     def __init__(
         self,
         *,
-        num_classes: int,
+        num_classes_train: int,
+        num_classes_test: int,
         ignore_value: int = -1,
         # extra parameters
         feature_resolution: list,
@@ -33,7 +34,7 @@ class OWCATSegHead(nn.Module):
         device="cuda",
         att_embeddings: Optional[str] = None,
         prev_intro_cls: int = 0,
-        cur_intro_cls: int = 0,
+        #cur_intro_cls: int = 0,
         unknown_cls: int = 0,
         thr: float = 0.8,
         alpha: float = 0.5,
@@ -42,6 +43,7 @@ class OWCATSegHead(nn.Module):
         distributions: Optional[str] = None,
         top_k: int = 10,
         fusion_att: bool = False,
+        enable_ow_mode:bool = True, #ow mode control
     ):
         """
         NOTE: this interface is experimental.
@@ -54,7 +56,10 @@ class OWCATSegHead(nn.Module):
         super().__init__()
         self.ignore_value = ignore_value
         self.predictor = transformer_predictor
-        self.num_classes = num_classes
+
+        self.num_classes_train = num_classes_train
+        self.num_classes_test = num_classes_test
+
         self.feature_resolution = feature_resolution
 
         # ow-ovss new
@@ -65,26 +70,29 @@ class OWCATSegHead(nn.Module):
         self.distributions = distributions
         self.thrs = [thr]
         self.prev_intro_cls = prev_intro_cls
-        self.cur_intro_cls = cur_intro_cls
+        #self.cur_intro_cls = cur_intro_cls
         self.unknown_cls = unknown_cls
         self.prev_distribution = prev_distribution
         self.top_k = top_k
         self.fusion_att = fusion_att
+        self.enable_ow_mode = enable_ow_mode  # NEW
 
         self.load_att_embeddings(att_embeddings)
 
     @classmethod
     def from_config(cls, cfg, input_shape: Dict[str, ShapeSpec]):
-        return {
+        return{
             "ignore_value": cfg.MODEL.SEM_SEG_HEAD.IGNORE_VALUE,
-            "num_classes": cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES,
+            "num_classes_train": cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES_TRAIN,
+            "num_classes_test": cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES_TEST,
+
             "feature_resolution": cfg.MODEL.SEM_SEG_HEAD.FEATURE_RESOLUTION,
             "transformer_predictor": OWCATSegPredictor(cfg),
 
             # ow-ovss new
             "att_embeddings": cfg.MODEL.SEM_SEG_HEAD.ATT_EMBEDDINGS,
             "prev_intro_cls": cfg.MODEL.SEM_SEG_HEAD.PREV_INTRO_CLS,
-            "cur_intro_cls": cfg.MODEL.SEM_SEG_HEAD.CUR_INTRO_CLS,
+            #"cur_intro_cls": cfg.MODEL.SEM_SEG_HEAD.CUR_INTRO_CLS,
             "unknown_cls": cfg.MODEL.SEM_SEG_HEAD.UNKNOWN_CLS,
             "thr": cfg.MODEL.SEM_SEG_HEAD.THR,
             "alpha": cfg.MODEL.SEM_SEG_HEAD.ALPHA,
@@ -93,6 +101,7 @@ class OWCATSegHead(nn.Module):
             "distributions": cfg.MODEL.SEM_SEG_HEAD.DISTRIBUTIONS,
             "top_k": cfg.MODEL.SEM_SEG_HEAD.TOP_K,
             "fusion_att": cfg.MODEL.SEM_SEG_HEAD.FUSION_ATT,
+            "enable_ow_mode": cfg.MODEL.SEM_SEG_HEAD.ENABLE_OW_MODE,
         }
 
     @property
@@ -256,8 +265,9 @@ class OWCATSegHead(nn.Module):
                                                     self.negative_distributions[thr_id])
 
         # 전체 attribute 개수 확인
-        total_attributes = len(self.texts)
-        target_selection_count = per_class * self.num_classes
+        #total_attributes = len(self.texts)
+        total_attributes = self.att_embeddings.shape[0]
+        target_selection_count = per_class * self.num_classes_train
 
         # 선택하려는 개수가 전체보다 많으면 제한
         actual_selection_count = min(target_selection_count, total_attributes)
@@ -344,4 +354,14 @@ class OWCATSegHead(nn.Module):
             guidance_features: (B, C, H, W)
         """
         img_feat = rearrange(features[:, 1:, :], "b (h w) c->b c h w", h=self.feature_resolution[0], w=self.feature_resolution[1])
-        return self.predictor(img_feat, guidance_features, prompt, gt_cls, self.att_embeddings, self.fusion_att)
+        return self.predictor(img_feat,
+                              guidance_features,
+                              prompt,
+                              gt_cls,
+                              self.att_embeddings,
+                              self.fusion_att,
+                              self.enable_ow_mode,  # Pass the flag
+                              self.training,  # NEW: Pass training status
+                              self.num_classes_train,  # NEW: Training classes
+                              self.num_classes_test  # NEW: Evaluation classes
+                              )

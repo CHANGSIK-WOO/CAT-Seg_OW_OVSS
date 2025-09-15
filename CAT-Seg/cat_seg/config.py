@@ -96,7 +96,7 @@ def add_cat_seg_config(cfg):
     cfg.MODEL.SEM_SEG_HEAD.EMBEDDING_PATH = None
     cfg.MODEL.SEM_SEG_HEAD.ATT_EMBEDDINGS = None
     cfg.MODEL.SEM_SEG_HEAD.PREV_INTRO_CLS = 0
-    cfg.MODEL.SEM_SEG_HEAD.CUR_INTRO_CLS = 75
+    #cfg.MODEL.SEM_SEG_HEAD.CUR_INTRO_CLS = 75
     cfg.MODEL.SEM_SEG_HEAD.UNKNOWN_CLS = 75
     cfg.MODEL.SEM_SEG_HEAD.THR = 0.8
     cfg.MODEL.SEM_SEG_HEAD.ALPHA = 0.5
@@ -105,6 +105,11 @@ def add_cat_seg_config(cfg):
     cfg.MODEL.SEM_SEG_HEAD.DISTRIBUTIONS = None
     cfg.MODEL.SEM_SEG_HEAD.TOP_K = 10
     cfg.MODEL.SEM_SEG_HEAD.FUSION_ATT = False
+
+    # NEW: Train/Test class numbers and OW mode control
+    cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES_TRAIN = 171  # COCO training classes
+    cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES_TEST = 151   # ADE20K evaluation classes + 1 unknown
+    cfg.MODEL.SEM_SEG_HEAD.ENABLE_OW_MODE = True
 
     cfg.ATTRIBUTE_LOG_START_ITER = None
     cfg.ATTRIBUTE_SELECT_ITER = None
