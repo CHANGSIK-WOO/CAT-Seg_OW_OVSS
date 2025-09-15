@@ -30,7 +30,7 @@ class CATSegPredictor(nn.Module):
         text_guidance_proj_dim: int,
         appearance_guidance_dim: int,
         appearance_guidance_proj_dim: int,
-        prompt_depth: int,q
+        prompt_depth: int,
         prompt_length: int,
         decoder_dims: list,
         decoder_guidance_dims: list,
@@ -153,7 +153,7 @@ class CATSegPredictor(nn.Module):
         text = self.class_texts if self.training else self.test_class_texts
         text = [text[c] for c in gt_cls] if gt_cls is not None else text
         text = self.get_text_embeds(text, self.prompt_templates, self.clip_model, prompt)
-        
+
         text = text.repeat(x.shape[0], 1, 1, 1)
         out = self.transformer(x, text, vis)
         return out
