@@ -32,11 +32,11 @@ def _get_ade20k_150_meta():
     """
     Get metadata for ADE20K 150 classes with Open-World setup
     """
-    stuff_ids = [k for k in range(len(ADE20K_150_CLASSES))]
+    stuff_classes = ADE20K_150_CLASSES + ["unknown"]
+    stuff_ids = [k for k in range(len(stuff_classes))]
 
     # Create mapping from category_id to contiguous_id
     stuff_dataset_id_to_contiguous_id = {k: i for i, k in enumerate(stuff_ids)}
-    stuff_classes = ADE20K_150_CLASSES
 
     ret = {
         "stuff_dataset_id_to_contiguous_id": stuff_dataset_id_to_contiguous_id,

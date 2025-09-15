@@ -281,7 +281,7 @@ class OWSemSegEvaluator(DatasetEvaluator):
             if self._contiguous_id_to_dataset_id is not None:
                 assert (
                         label in self._contiguous_id_to_dataset_id
-                ), "Label {} is not in the metadata info for {}".format(label, self._dataset_name)
+                ), "Label {} is not in the meta data info for {}".format(label, self._dataset_name)
                 dataset_id = self._contiguous_id_to_dataset_id[label]
             else:
                 dataset_id = int(label)
