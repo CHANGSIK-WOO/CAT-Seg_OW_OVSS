@@ -7,9 +7,10 @@ MODEL:
     NAME: "OWCATSegHead"
     IN_FEATURES: ["res2", "res3", "res4"]
     IGNORE_VALUE: 255
+
     NUM_CLASSES: 171
     TRAIN_CLASS_JSON: "datasets/coco.json"
-    TEST_CLASS_JSON: "datasets/coco.json"
+    TEST_CLASS_JSON: "datasets/ade150.json"
     CLIP_PRETRAINED: "ViT-B/16"
     PROMPT_DEPTH: 0
     PROMPT_LENGTH: 0
@@ -43,6 +44,11 @@ MODEL:
     TOP_K: 10           # Top-k attributes for unknown prediction
     FUSION_ATT: False
   PROMPT_ENSEMBLE_TYPE: "single"
+
+# 학습과 평가 데이터셋 분리
+DATASETS:
+  TRAIN: ("coco_2017_train_stuff_all_sem_seg",)  # COCO-STUFF로 학습
+  TEST: ("ade20k_150_ow_val_sem_seg",)           # ADE20K-150으로 평가
 
 INPUT:
   MIN_SIZE_TRAIN: (256, )
