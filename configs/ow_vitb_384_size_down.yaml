@@ -1,0 +1,86 @@
+_BASE_: config.yaml
+MODEL:
+  META_ARCHITECTURE: "OWCATSeg"
+  PIXEL_MEAN: [123.675, 116.280, 103.530]
+  PIXEL_STD: [58.395, 57.120, 57.375]
+  SEM_SEG_HEAD:
+    NAME: "OWCATSegHead"
+    IN_FEATURES: ["res2", "res3", "res4"]
+    IGNORE_VALUE: 255
+
+    #NUM_CLASSES: 171
+    NUM_CLASSES_TRAIN: 171
+    NUM_CLASSES_TEST: 151 #ADE20K-150 + 1 (UNKNOWN)
+
+    TRAIN_CLASS_JSON: "datasets/coco.json"
+    TEST_CLASS_JSON: "datasets/ade150.json"
+
+    CLIP_PRETRAINED: "ViT-B/16"
+    PROMPT_DEPTH: 0
+    PROMPT_LENGTH: 0
+    TEXT_GUIDANCE_DIM: 512
+    TEXT_GUIDANCE_PROJ_DIM: 128
+    APPEARANCE_GUIDANCE_DIM: 512
+    APPEARANCE_GUIDANCE_PROJ_DIM: 128
+    DECODER_DIMS: [64, 32]
+    DECODER_GUIDANCE_DIMS: [256, 128]
+    DECODER_GUIDANCE_PROJ_DIMS: [32, 16]
+    NUM_LAYERS: 2
+    NUM_HEADS: 4
+    HIDDEN_DIMS: 128
+    POOLING_SIZES: [2, 2]
+    FEATURE_RESOLUTION: [16, 16]
+    WINDOW_SIZES: 8
+    ATTENTION_TYPE: "linear"
+    CLIP_FINETUNE: "attention"
+
+    #ow-ovss new
+    EMBEDDING_PATH: "data/coco/cls_embeddings.npy"
+    ATT_EMBEDDINGS: "data/coco/att_embeddings.pth"
+    PREV_INTRO_CLS: 0    # Start of known classes (Always 0)
+    #CUR_INTRO_CLS: 75    # Start of unknown classes (0~
+    UNKNOWN_CLS: 75      # First unknown class index (class 75~149 will be mapped to unknown)
+    THR: 0.75           # Threshold for attribute prediction
+    ALPHA: 0.3          # Alpha for attribute selection
+    USE_SIGMOID: True
+    PREV_DISTRIBUTION: None
+    DISTRIBUTIONS: "data/coco/distributions.pth"
+    TOP_K: 10           # Top-k attributes for unknown prediction
+    FUSION_ATT: False
+
+    # NEW: OW Evaluation mode
+    ENABLE_OW_MODE: True        # Set to False for baseline comparison
+
+  PROMPT_ENSEMBLE_TYPE: "single"
+
+# 학습과 평가 데이터셋 분리
+DATASETS:
+  TRAIN: ("coco_2017_train_stuff_all_sem_seg",)  # COCO-STUFF로 학습
+  TEST: ("ade20k_150_ow_val_sem_seg",)           # ADE20K-150으로 평가
+
+INPUT:
+  MIN_SIZE_TRAIN: (256, )
+  MIN_SIZE_TRAIN_SAMPLING: "choice"
+  MIN_SIZE_TEST: 640
+  CROP:
+    ENABLED: True
+    TYPE: "absolute"
+    SIZE: (256, 256)
+  SIZE_DIVISIBILITY: 256
+  FORMAT: "RGB"
+  DATASET_MAPPER_NAME: "ow_mask_former_semantic"
+
+SOLVER:
+  IMS_PER_BATCH: 1 # 4->2
+  LR_SCHEDULER_NAME: WarmupCosineLR
+  BASE_LR: 0.0002
+  MAX_ITER: 20000 #80000->100
+  BACKBONE_MULTIPLIER: 0.0
+  CLIP_MULTIPLIER: 0.01
+
+TEST:
+  EVAL_PERIOD: 0 #5000->100
+
+
+ATTRIBUTE_LOG_START_ITER: 50    # ← 이 값이 실제로 사용됨
+ATTRIBUTE_SELECT_ITER: 80       # ← 이 값이 실제로 사용됨
