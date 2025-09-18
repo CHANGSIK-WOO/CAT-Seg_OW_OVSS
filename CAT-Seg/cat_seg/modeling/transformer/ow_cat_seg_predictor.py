@@ -211,24 +211,24 @@ class OWCATSegPredictor(nn.Module):
                 fusion_att=False, enable_ow_mode=True, is_training=True,
                 num_classes_train=171, num_classes_test=151):
         # 🔧 디버깅 코드 1: 매개변수 확인
-        print(f"\n[DEBUG 1] OWCATSegPredictor.forward called:")
-        print(f"  self.training: {self.training}")
-        print(f"  enable_ow_mode: {enable_ow_mode}")
-        print(f"  att_embeddings is not None: {att_embeddings is not None}")
-        if att_embeddings is not None:
-            print(f"  att_embeddings.shape: {att_embeddings.shape}")
-        print(f"  fusion_att: {fusion_att}")
+        # print(f"\n[DEBUG 1] OWCATSegPredictor.forward called:")
+        # print(f"  self.training: {self.training}")
+        # print(f"  enable_ow_mode: {enable_ow_mode}")
+        # # print(f"  att_embeddings is not None: {att_embeddings is not None}")
+        # if att_embeddings is not None:
+        #     print(f"  att_embeddings.shape: {att_embeddings.shape}")
+        # print(f"  fusion_att: {fusion_att}")
 
         vis = [vis_guidance[k] for k in vis_guidance.keys()][::-1]
         text = self.class_texts if self.training else self.test_class_texts[:self.unknown_cls]
 
         # 🔧 디버깅 코드 2: 텍스트 처리 확인
-        print(f"[DEBUG 2] Text processing:")
-        print(f"  Using training texts: {self.training}")
-        print(f"  self.unknown_cls: {self.unknown_cls}")
-        if not self.training:
-            print(f"  len(self.test_class_texts): {len(self.test_class_texts)}")
-            print(f"  len(text after [:unknown_cls]): {len(text)}")
+        # print(f"[DEBUG 2] Text processing:")
+        # print(f"  Using training texts: {self.training}")
+        # print(f"  self.unknown_cls: {self.unknown_cls}")
+        # if not self.training:
+        #     print(f"  len(self.test_class_texts): {len(self.test_class_texts)}")
+        #     print(f"  len(text after [:unknown_cls]): {len(text)}")
 
 
         text = [text[c] for c in gt_cls] if gt_cls is not None else text
@@ -240,29 +240,29 @@ class OWCATSegPredictor(nn.Module):
         logits = self.transformer(x, text, vis)
 
         # 🔧 디버깅 코드 3: 첫 번째 transformer 결과 확인
-        print(f"[DEBUG 3] First transformer output:")
-        print(f"  logits.shape: {logits.shape}")
-        print(f"  logits.min(): {logits.min():.3f}")
-        print(f"  logits.max(): {logits.max():.3f}")
-        print(f"  logits.argmax() range: {logits.argmax(dim=1).min()}-{logits.argmax(dim=1).max()}")
+        # print(f"[DEBUG 3] First transformer output:")
+        # print(f"  logits.shape: {logits.shape}")
+        # print(f"  logits.min(): {logits.min():.3f}")
+        # print(f"  logits.max(): {logits.max():.3f}")
+        # print(f"  logits.argmax() range: {logits.argmax(dim=1).min()}-{logits.argmax(dim=1).max()}")
 
         # 🔧 OW mode 처리
         if not self.training and enable_ow_mode and att_embeddings is not None:
             # 🔧 디버깅 코드 4: OW 경로 진입 확인
-            print(f"[DEBUG 4] Entering OW evaluation path")
+            # print(f"[DEBUG 4] Entering OW evaluation path")
             result = self.forward_evaluation_ow(x, vis, logits, att_embeddings, fusion_att)
-            print(f"[DEBUG 5] OW evaluation result:")
-            print(f"  result.shape: {result.shape}")
-            print(f"  result.min(): {result.min():.3f}")
-            print(f"  result.max(): {result.max():.3f}")
-            print(f"  result.argmax() range: {result.argmax(dim=1).min()}-{result.argmax(dim=1).max()}")
+            # print(f"[DEBUG 5] OW evaluation result:")
+            # print(f"  result.shape: {result.shape}")
+            # print(f"  result.min(): {result.min():.3f}")
+            # print(f"  result.max(): {result.max():.3f}")
+            # print(f"  result.argmax() range: {result.argmax(dim=1).min()}-{result.argmax(dim=1).max()}")
             return result
 
         elif not self.training and not enable_ow_mode:
-            print(f"[DEBUG] Using baseline evaluation")
+            # print(f"[DEBUG] Using baseline evaluation")
             return self.forward_evaluation_baseline(logits)
         else:
-            print(f"[DEBUG] Returning training logits")
+            # print(f"[DEBUG] Returning training logits")
             return logits
 
     def forward_evaluation_ow(self, x, vis, known_logits, att_embeddings, fusion_att):
@@ -270,53 +270,53 @@ class OWCATSegPredictor(nn.Module):
         🔧 OW mode evaluation: 151개 클래스 출력
         """
         # 🔧 디버깅 코드 6: forward_evaluation_ow 진입 확인
-        print(f"\n[DEBUG 6] forward_evaluation_ow called:")
+        # print(f"\n[DEBUG 6] forward_evaluation_ow called:")
         B, C_known, H, W = known_logits.shape
-        print(f"  known_logits.shape: {known_logits.shape}")
-        print(f"  att_embeddings.shape: {att_embeddings.shape}")
-        print(f"  fusion_att: {fusion_att}")
+        # print(f"  known_logits.shape: {known_logits.shape}")
+        # print(f"  att_embeddings.shape: {att_embeddings.shape}")
+        # print(f"  fusion_att: {fusion_att}")
 
         # Process attribute embeddings
         if fusion_att:
             num_att = att_embeddings.shape[0]
             att_text = att_embeddings.unsqueeze(0).unsqueeze(2).repeat(B, 1, 1, 1)
-            print(f"[DEBUG] Using fusion_att mode")
+            # print(f"[DEBUG] Using fusion_att mode")
         else:
             att_text = att_embeddings.unsqueeze(0).unsqueeze(2).repeat(B, 1, 1, 1)
-            print(f"[DEBUG] Using separate mode")
-
-        print(f"  att_text.shape: {att_text.shape}")
+        #     print(f"[DEBUG] Using separate mode")
+        #
+        # print(f"  att_text.shape: {att_text.shape}")
 
         # Get attribute predictions
         att_logits = self.transformer(x, att_text, vis)
 
         # 🔧 디버깅 코드 7: 두 번째 transformer 결과 확인
-        print(f"[DEBUG 7] Second transformer output (attributes):")
-        print(f"  att_logits.shape: {att_logits.shape}")
-        print(f"  att_logits.min(): {att_logits.min():.3f}")
-        print(f"  att_logits.max(): {att_logits.max():.3f}")
-        print(f"  att_logits.argmax() range: {att_logits.argmax(dim=1).min()}-{att_logits.argmax(dim=1).max()}")
+        # print(f"[DEBUG 7] Second transformer output (attributes):")
+        # print(f"  att_logits.shape: {att_logits.shape}")
+        # print(f"  att_logits.min(): {att_logits.min():.3f}")
+        # print(f"  att_logits.max(): {att_logits.max():.3f}")
+        # print(f"  att_logits.argmax() range: {att_logits.argmax(dim=1).min()}-{att_logits.argmax(dim=1).max()}")
 
         # 🔧 핵심 수정: att_logits를 unknown_score로 변환
         unknown_score = self.predict_unknown(known_logits, att_logits)
 
         # 🔧 디버깅 코드 8: predict_unknown 결과 확인
-        print(f"[DEBUG 8] predict_unknown result:")
-        print(f"  unknown_score.shape: {unknown_score.shape}")
-        print(f"  unknown_score.min(): {unknown_score.min():.3f}")
-        print(f"  unknown_score.max(): {unknown_score.max():.3f}")
+        # print(f"[DEBUG 8] predict_unknown result:")
+        # print(f"  unknown_score.shape: {unknown_score.shape}")
+        # print(f"  unknown_score.min(): {unknown_score.min():.3f}")
+        # print(f"  unknown_score.max(): {unknown_score.max():.3f}")
 
         # Construct final output: [B, 151, H, W]
         padding = torch.full((B, 75, H, W), -100.0, device=known_logits.device, dtype=known_logits.dtype)
         final_output = torch.cat([known_logits, padding, unknown_score], dim=1)
 
         # 🔧 디버깅 코드 9: 최종 출력 확인
-        print(f"[DEBUG 9] Final output construction:")
-        print(f"  known_logits.shape: {known_logits.shape}")
-        print(f"  padding.shape: {padding.shape}")
-        print(f"  unknown_score.shape: {unknown_score.shape}")
-        print(f"  final_output.shape: {final_output.shape}")
-        print(f"  final_output.argmax() range: {final_output.argmax(dim=1).min()}-{final_output.argmax(dim=1).max()}")
+        # print(f"[DEBUG 9] Final output construction:")
+        # print(f"  known_logits.shape: {known_logits.shape}")
+        # print(f"  padding.shape: {padding.shape}")
+        # print(f"  unknown_score.shape: {unknown_score.shape}")
+        # print(f"  final_output.shape: {final_output.shape}")
+        # print(f"  final_output.argmax() range: {final_output.argmax(dim=1).min()}-{final_output.argmax(dim=1).max()}")
 
         return final_output
 
@@ -432,22 +432,25 @@ class OWCATSegPredictor(nn.Module):
 
         print(f"[DEBUG] Generating new embeddings for {len(classnames)} classes")
 
-        if self.tokens is None or prompt is not None:
-            tokens = []
-            for classname in classnames:
-                if ', ' in classname:
-                    classname_splits = classname.split(', ')
-                    texts = [template.format(classname_splits[0]) for template in templates]
-                else:
-                    texts = [template.format(classname) for template in templates]
-                if self.tokenizer is not None:
-                    texts = self.tokenizer(texts).cuda()
-                else:
-                    texts = clip.tokenize(texts).cuda()
-                tokens.append(texts)
-            tokens = torch.stack(tokens, dim=0).squeeze(1)
-            if prompt is None:
-                self.tokens = tokens
+        # 🔧 수정: tokens 변수를 항상 초기화하도록 변경
+        tokens = []
+        for classname in classnames:
+            if ', ' in classname:
+                classname_splits = classname.split(', ')
+                texts = [template.format(classname_splits[0]) for template in templates]
+            else:
+                texts = [template.format(classname) for template in templates]
+            if self.tokenizer is not None:
+                texts = self.tokenizer(texts).cuda()
+            else:
+                texts = clip.tokenize(texts).cuda()
+            tokens.append(texts)
+
+        tokens = torch.stack(tokens, dim=0).squeeze(1)
+
+        # 🔧 수정: self.tokens 할당 조건을 간소화
+        if prompt is None:
+            self.tokens = tokens
 
         class_embeddings = clip_model.encode_text(tokens, prompt)
         class_embeddings = class_embeddings / class_embeddings.norm(dim=-1, keepdim=True)

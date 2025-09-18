@@ -162,7 +162,8 @@ class OWSemSegEvaluator(DatasetEvaluator):
             f"Unknown classes: {len(self._unknown_classes)} ({self._known_classes_end}-{self._num_classes - 1})")
 
     def reset(self):
-        self._conf_matrix = np.zeros((self._num_classes, self._num_classes), dtype=np.int64)
+        # 🔧 수정: confusion matrix 크기를 올바르게 설정 (ignore class 포함)
+        self._conf_matrix = np.zeros((self._num_classes + 1, self._num_classes + 1), dtype=np.int64)
         self._predictions = []
 
     def process(self, inputs, outputs):
@@ -178,13 +179,23 @@ class OWSemSegEvaluator(DatasetEvaluator):
             with PathManager.open(self.input_file_to_gt_file[input["file_name"]], "rb") as f:
                 gt = np.array(Image.open(f), dtype=int)
 
+            # 🔧 수정: GT의 ignore label을 마지막 클래스로 매핑
             gt[gt == self._ignore_label] = self._num_classes
 
-            print("[DEBUG] K:", self._num_classes)  # 기대: 151
-            print("[DEBUG] gt.min/max:", int(gt.min()), int(gt.max()))
-            print("[DEBUG] pred.min/max:", int(pred.min()), int(pred.max()))
-            print("[DEBUG] uniq(gt) tail:", sorted(np.unique(gt))[-10:])
+            # 🔧 NEW: Unknown 클래스 통일 (GT의 75-149 → 150으로 매핑)
+            unknown_mask = (gt >= self._known_classes_end) & (gt < self._num_classes)
+            gt[unknown_mask] = 150  # GT의 unknown classes를 150으로 통일
 
+            # 🔧 수정: 예측값이 유효 범위를 벗어나면 클리핑
+            pred = np.clip(pred, 0, self._num_classes)
+
+            print("[DEBUG] Confusion matrix shape:", self._conf_matrix.shape)
+            print("[DEBUG] GT unique values:", sorted(np.unique(gt)))
+            print("[DEBUG] Pred unique values:", sorted(np.unique(pred)))
+            print("[DEBUG] GT range:", int(gt.min()), "to", int(gt.max()))
+            print("[DEBUG] Pred range:", int(pred.min()), "to", int(pred.max()))
+
+            # 🔧 수정: 올바른 크기로 bincount 수행
             self._conf_matrix += np.bincount(
                 (self._num_classes + 1) * pred.reshape(-1) + gt.reshape(-1),
                 minlength=self._conf_matrix.size,
@@ -214,13 +225,16 @@ class OWSemSegEvaluator(DatasetEvaluator):
             with PathManager.open(file_path, "w") as f:
                 f.write(json.dumps(self._predictions))
 
-        # Calculate metrics for all classes
-        acc = np.full(self._num_classes, np.nan, dtype=float)
-        iou = np.full(self._num_classes, np.nan, dtype=float)
-        tp = self._conf_matrix.diagonal()[:-1].astype(float)
-        pos_gt = np.sum(self._conf_matrix[:-1, :-1], axis=0).astype(float)
-        class_weights = pos_gt / np.sum(pos_gt)
-        pos_pred = np.sum(self._conf_matrix[:-1, :-1], axis=1).astype(float)
+        # 🔧 수정: 실제 클래스 수에 맞춰 계산 (ignore class 제외)
+        valid_classes = min(self._num_classes, self._conf_matrix.shape[0] - 1)
+
+        # Calculate metrics for valid classes only
+        acc = np.full(valid_classes, np.nan, dtype=float)
+        iou = np.full(valid_classes, np.nan, dtype=float)
+        tp = self._conf_matrix.diagonal()[:valid_classes].astype(float)
+        pos_gt = np.sum(self._conf_matrix[:valid_classes, :valid_classes], axis=0).astype(float)
+        class_weights = pos_gt / np.sum(pos_gt) if np.sum(pos_gt) > 0 else np.zeros_like(pos_gt)
+        pos_pred = np.sum(self._conf_matrix[:valid_classes, :valid_classes], axis=1).astype(float)
         acc_valid = pos_gt > 0
         acc[acc_valid] = tp[acc_valid] / pos_gt[acc_valid]
         iou_valid = (pos_gt + pos_pred) > 0
@@ -228,14 +242,14 @@ class OWSemSegEvaluator(DatasetEvaluator):
         iou[iou_valid] = tp[iou_valid] / union[iou_valid]
 
         # Overall metrics
-        macc = np.sum(acc[acc_valid]) / np.sum(acc_valid)
-        miou = np.sum(iou[iou_valid]) / np.sum(iou_valid)
-        fiou = np.sum(iou[acc_valid] * class_weights[acc_valid])
-        pacc = np.sum(tp) / np.sum(pos_gt)
+        macc = np.sum(acc[acc_valid]) / np.sum(acc_valid) if np.sum(acc_valid) > 0 else 0.0
+        miou = np.sum(iou[iou_valid]) / np.sum(iou_valid) if np.sum(iou_valid) > 0 else 0.0
+        fiou = np.sum(iou[acc_valid] * class_weights[acc_valid]) if np.sum(acc_valid) > 0 else 0.0
+        pacc = np.sum(tp) / np.sum(pos_gt) if np.sum(pos_gt) > 0 else 0.0
 
         # Separate metrics for known and unknown classes
-        known_valid = np.array([i in self._known_classes for i in range(self._num_classes)]) & iou_valid
-        unknown_valid = np.array([i in self._unknown_classes for i in range(self._num_classes)]) & iou_valid
+        known_valid = np.array([i in self._known_classes for i in range(valid_classes)]) & iou_valid
+        unknown_valid = np.array([i in self._unknown_classes for i in range(valid_classes)]) & iou_valid
 
         known_miou = np.sum(iou[known_valid]) / np.sum(known_valid) if np.sum(known_valid) > 0 else 0.0
         unknown_miou = np.sum(iou[unknown_valid]) / np.sum(unknown_valid) if np.sum(unknown_valid) > 0 else 0.0
@@ -258,8 +272,9 @@ class OWSemSegEvaluator(DatasetEvaluator):
         res["Unknown_mIoU"] = 100 * unknown_miou
         res["Harmonic_Mean"] = 100 * harmonic_mean
 
-        # Per-class IoU and ACC
-        for i, name in enumerate(self._class_names):
+        # Per-class IoU and ACC (valid classes only)
+        for i in range(min(len(self._class_names), valid_classes)):
+            name = self._class_names[i]
             res["IoU-{}".format(name)] = 100 * iou[i]
             res["ACC-{}".format(name)] = 100 * acc[i]
 
@@ -284,10 +299,10 @@ class OWSemSegEvaluator(DatasetEvaluator):
         json_list = []
         for label in np.unique(sem_seg):
             if self._contiguous_id_to_dataset_id is not None:
-                assert (
-                        label in self._contiguous_id_to_dataset_id
-                ), "Label {} is not in the meta data info for {}".format(label, self._dataset_name)
-                dataset_id = self._contiguous_id_to_dataset_id[label]
+                if label in self._contiguous_id_to_dataset_id:
+                    dataset_id = self._contiguous_id_to_dataset_id[label]
+                else:
+                    continue  # Skip unknown labels
             else:
                 dataset_id = int(label)
             mask = (sem_seg == label).astype(np.uint8)
