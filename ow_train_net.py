@@ -108,7 +108,7 @@ class OWSemSegEvaluator(DatasetEvaluator):
 
     def __init__(
             self, dataset_name, distributed, output_dir=None, *,
-            num_classes=None, ignore_label=None, known_classes_end=75
+            num_classes=None, ignore_label=255, known_classes_end=75
     ):
         """
         Args:
@@ -154,7 +154,7 @@ class OWSemSegEvaluator(DatasetEvaluator):
         self._ignore_label = ignore_label if ignore_label is not None else meta.ignore_label
 
         # Split classes into known and unknown
-        self._known_classes = list(range(self._known_classes_end))  # 0-74
+        self._known_classes = list(range(0, self._known_classes_end))  # 0-74
         self._unknown_classes = list(range(self._known_classes_end, self._num_classes))  # 75-149
 
         self._logger.info(f"Known classes: {len(self._known_classes)} (0-{self._known_classes_end})")
