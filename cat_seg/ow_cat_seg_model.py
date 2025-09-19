@@ -36,8 +36,8 @@ class OWCATSeg(nn.Module):
         clip_pretrained: str,
 
         #ow-ovss new
-        unknown_cls: int = 75,
-        crop_size:int = 384,
+        unknown_class_index: int = None,
+        crop_size:int = None,
 
     ):
         """
@@ -82,7 +82,7 @@ class OWCATSeg(nn.Module):
         self.sliding_window = sliding_window
 
         # ow-ovss new
-        self.unknown_cls = unknown_cls
+        self.unknown_class_index = unknown_class_index
         self.crop_size = crop_size
 
         # ow-ovss new
@@ -128,7 +128,7 @@ class OWCATSeg(nn.Module):
             "clip_finetune": cfg.MODEL.SEM_SEG_HEAD.CLIP_FINETUNE,
             "backbone_multiplier": cfg.SOLVER.BACKBONE_MULTIPLIER,
             "clip_pretrained": cfg.MODEL.SEM_SEG_HEAD.CLIP_PRETRAINED,
-            "unknown_cls": cfg.MODEL.SEM_SEG_HEAD.UNKNOWN_CLS,
+            "unknown_class_index": cfg.MODEL.SEM_SEG_HEAD.UNKNOWN_ID,
             "crop_size" : cfg.INPUT.CROP.SIZE,
         }
 

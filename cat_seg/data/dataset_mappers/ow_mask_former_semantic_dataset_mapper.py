@@ -84,13 +84,12 @@ class OWMaskFormerSemanticDatasetMapper:
         # Assume always applies to the training set.
         dataset_names = cfg.DATASETS.TRAIN
         meta = MetadataCatalog.get(dataset_names[0])
-        ignore_label = meta.ignore_label
 
         ret = {
             "is_train": is_train,
             "augmentations": augs,
             "image_format": cfg.INPUT.FORMAT,
-            "ignore_label": ignore_label,
+            "ignore_label": cfg.SEM_SEG_HEAD.IGNORE_VALUE,
             "size_divisibility": cfg.INPUT.SIZE_DIVISIBILITY,
         }
         return ret

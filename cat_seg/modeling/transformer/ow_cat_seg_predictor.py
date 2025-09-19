@@ -44,8 +44,8 @@ class OWCATSegPredictor(nn.Module):
         attention_type: str,
 
         # ow-ovdd new
-        unknown_cls: int = 75,
-        top_k: int = 10,
+        unknown_class_index: int = None,
+        top_k: int = None,
         num_classes_train: int = 170,
         num_classes_test: int = 151,  # NEW: Total number of classes (150 ADE20K + 1 unknown)
 
@@ -102,7 +102,7 @@ class OWCATSegPredictor(nn.Module):
         self.clip_preprocess = clip_preprocess
 
         # OW-OVD specific
-        self.unknown_cls = unknown_cls
+        self.unknown_class_index = unknown_class_index
         self.top_k = top_k
         self.num_classes_train = num_classes_train
         self.num_classes_test = num_classes_test
@@ -160,7 +160,7 @@ class OWCATSegPredictor(nn.Module):
         ret["attention_type"] = cfg.MODEL.SEM_SEG_HEAD.ATTENTION_TYPE
 
         # OW-OVD parameters
-        ret["unknown_cls"] = cfg.MODEL.SEM_SEG_HEAD.UNKNOWN_CLS
+        ret["unknown_class_index"] = cfg.MODEL.SEM_SEG_HEAD.UNKNOWN_ID
         ret["top_k"] = cfg.MODEL.SEM_SEG_HEAD.TOP_K
         ret["num_classes_train"] = cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES_TRAIN
         ret["num_classes_test"] = cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES_TEST
@@ -220,7 +220,7 @@ class OWCATSegPredictor(nn.Module):
         # print(f"  fusion_att: {fusion_att}")
 
         vis = [vis_guidance[k] for k in vis_guidance.keys()][::-1]
-        text = self.class_texts if self.training else self.test_class_texts[:self.unknown_cls]
+        text = self.class_texts if self.training else self.test_class_texts[:self.unknown_class_index]
 
         # 🔧 디버깅 코드 2: 텍스트 처리 확인
         # print(f"[DEBUG 2] Text processing:")

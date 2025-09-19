@@ -26,6 +26,14 @@ MODEL:
     WINDOW_SIZES: 12
     ATTENTION_TYPE: "linear"
     CLIP_FINETUNE: "attention"
+
+    EMBEDDING_PATH: "data/coco/cls_embeddings.npy"
+    ATT_EMBEDDINGS: "data/coco/att_embeddings.pth"
+    PREV_INTRO_CLS: 0    # PREVIOUS TEST TASK'S CLASS NUM
+    CUR_INTRO_CLS: 75    # CURRENT TEST TASK'S CLASS NUM
+    UNKNOWN_ID: 150      # TEST DATASET'S UNKNOWN ID (EQUAL TO TEST DATASET'S NUM)
+
+
   PROMPT_ENSEMBLE_TYPE: "imagenet"
 DATASETS:
   TRAIN: ("coco_2017_train_stuff_all_sem_seg",)

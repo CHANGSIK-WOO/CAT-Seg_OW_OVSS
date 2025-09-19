@@ -25,7 +25,7 @@ class OWCATSegHead(nn.Module):
         *,
         num_classes_train: int,
         num_classes_test: int,
-        ignore_value: int = -1,
+        ignore_label: int = None,
         # extra parameters
         feature_resolution: list,
         transformer_predictor: nn.Module,
@@ -33,15 +33,15 @@ class OWCATSegHead(nn.Module):
         #ow-ovss new
         device="cuda",
         att_embeddings: Optional[str] = None,
-        prev_intro_cls: int = 0,
-        #cur_intro_cls: int = 0,
-        unknown_cls: int = 0,
-        thr: float = 0.8,
-        alpha: float = 0.5,
+        prev_intro_cls: int = None,
+        cur_intro_cls: int = None,
+        unknown_class_index: int = None,
+        thr: float = None,
+        alpha: float = None,
         use_sigmoid: bool = True,
         prev_distribution: Optional[str] = None,
         distributions: Optional[str] = None,
-        top_k: int = 10,
+        top_k: int = None,
         fusion_att: bool = False,
         enable_ow_mode:bool = True, #ow mode control
     ):
@@ -54,7 +54,7 @@ class OWCATSegHead(nn.Module):
             transformer_predictor: the transformer decoder that makes prediction
         """
         super().__init__()
-        self.ignore_value = ignore_value
+        self.ignore_label = ignore_label
         self.predictor = transformer_predictor
 
         self.num_classes_train = num_classes_train
@@ -70,8 +70,8 @@ class OWCATSegHead(nn.Module):
         self.distributions = distributions
         self.thrs = [thr]
         self.prev_intro_cls = prev_intro_cls
-        #self.cur_intro_cls = cur_intro_cls
-        self.unknown_cls = unknown_cls
+        self.cur_intro_cls = cur_intro_cls
+        self.unknown_class_index = unknown_class_index
         self.prev_distribution = prev_distribution
         self.top_k = top_k
         self.fusion_att = fusion_att
@@ -82,7 +82,7 @@ class OWCATSegHead(nn.Module):
     @classmethod
     def from_config(cls, cfg, input_shape: Dict[str, ShapeSpec]):
         return{
-            "ignore_value": cfg.MODEL.SEM_SEG_HEAD.IGNORE_VALUE,
+            "ignore_label": cfg.MODEL.SEM_SEG_HEAD.IGNORE_VALUE,
             "num_classes_train": cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES_TRAIN,
             "num_classes_test": cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES_TEST,
 
@@ -92,8 +92,8 @@ class OWCATSegHead(nn.Module):
             # ow-ovss new
             "att_embeddings": cfg.MODEL.SEM_SEG_HEAD.ATT_EMBEDDINGS,
             "prev_intro_cls": cfg.MODEL.SEM_SEG_HEAD.PREV_INTRO_CLS,
-            #"cur_intro_cls": cfg.MODEL.SEM_SEG_HEAD.CUR_INTRO_CLS,
-            "unknown_cls": cfg.MODEL.SEM_SEG_HEAD.UNKNOWN_CLS,
+            "cur_intro_cls": cfg.MODEL.SEM_SEG_HEAD.CUR_INTRO_CLS,
+            "unknown_class_index": cfg.MODEL.SEM_SEG_HEAD.UNKNOWN_ID,
             "thr": cfg.MODEL.SEM_SEG_HEAD.THR,
             "alpha": cfg.MODEL.SEM_SEG_HEAD.ALPHA,
             "use_sigmoid": cfg.MODEL.SEM_SEG_HEAD.USE_SIGMOID,
@@ -225,7 +225,6 @@ class OWCATSegHead(nn.Module):
             print("No att_embeddings available, skipping attribute selection")
             return
 
-        # 현재 수집된 distributions가 있는지 확인
         if (self.positive_distributions is None or
                 self.negative_distributions is None):
             print("No distributions collected in current training, skipping attribute selection")
@@ -233,7 +232,6 @@ class OWCATSegHead(nn.Module):
 
         import os
 
-        # 파일이 있는지 확인하여 분기 처리
         if self.distributions is not None and os.path.exists(self.distributions):
             print(f"Loading existing distributions from {self.distributions}")
             try:

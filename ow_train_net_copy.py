@@ -15,8 +15,7 @@ import torch
 
 import detectron2.utils.comm as comm
 from detectron2.checkpoint import DetectionCheckpointer
-from detectron2.config import get_cfg, configurable
-
+from detectron2.config import get_cfg
 from detectron2.data import MetadataCatalog, build_detection_train_loader
 from detectron2.engine import DefaultTrainer, default_argument_parser, default_setup, launch
 from detectron2.evaluation import CityscapesInstanceEvaluator, CityscapesSemSegEvaluator, \
@@ -101,16 +100,15 @@ class AttributeSelectionHook:
             return trainer.model
 
 
-class OWSemSegEvaluator(DatasetEvaluator):
+class _OWSemSegEvaluator(DatasetEvaluator):
     """
     Open-World Semantic Segmentation Evaluator.
     Evaluates both known (seen) and unknown (unseen) classes separately.
     """
 
-    @configurable
     def __init__(
             self, dataset_name, distributed, output_dir=None, *,
-            prev_intro_cls=None, cur_intro_cls=None, unknown_class_index=None, ignore_label=None,
+            num_classes=None, ignore_label=255, known_classes_end=75
     ):
         """
         Args:
@@ -121,6 +119,20 @@ class OWSemSegEvaluator(DatasetEvaluator):
             known_classes_end (int): last index of known classes (0-indexed)
         """
         self._logger = logging.getLogger(__name__)
+        if num_classes is not None:
+            self._logger.warn(
+                "OWSemSegEvaluator(num_classes) is deprecated! It should be obtained from metadata."
+            )
+        if ignore_label is not None:
+            self._logger.warn(
+                "OWSemSegEvaluator(ignore_label) is deprecated! It should be obtained from metadata."
+            )
+
+        self._dataset_name = dataset_name
+        self._distributed = distributed
+        self._output_dir = output_dir
+        self._cpu_device = torch.device("cpu")
+        self._known_classes_end = known_classes_end
 
         self.input_file_to_gt_file = {
             dataset_record["file_name"]: dataset_record["sem_seg_file_name"]
@@ -128,41 +140,31 @@ class OWSemSegEvaluator(DatasetEvaluator):
         }
 
         meta = MetadataCatalog.get(dataset_name)
+        # Dict that maps contiguous training ids to COCO category ids
+        try:
+            c2d = meta.stuff_dataset_id_to_contiguous_id
+            self._contiguous_id_to_dataset_id = {v: k for k, v in c2d.items()}
+        except AttributeError:
+            self._contiguous_id_to_dataset_id = None
 
-        self.prev_intro_cls = prev_intro_cls
-        self.cur_intro_cls = cur_intro_cls
-        self.unknown_class_index = unknown_class_index
-        self._num_seen_classes = self.prev_intro_cls + self.cur_intro_cls
-        self._class_names = meta.stuff_classes + (["unknown"] if self.unknown_class_index is not None else [])
-        self._num_classes = len(self._class_names)
-        self._known_classes = self._class_names[:self._num_seen_classes]
-        self._val_extra_classes = self._class_names[self._num_seen_classes:]
-        self._ignore_label = ignore_label
+        self._class_names = meta.stuff_classes + (["unknown"] if meta.classes[-1] != "unknown" else [])
 
-        self._dataset_name = dataset_name
-        self._distributed = distributed
-        self._output_dir = output_dir
-        self._cpu_device = torch.device("cpu")
+        self._num_classes = len(meta.stuff_classes)
+        if num_classes is not None:
+            assert self._num_classes == num_classes, f"{self._num_classes} != {num_classes}"
+        self._ignore_label = ignore_label if ignore_label is not None else meta.ignore_label
 
-        self._logger.info(f"Known classes: {len(self._known_classes)} (0-{len(self._known_classes)-1})")
-        self._logger.info(f"Unknown classes: {len(self._class_names) - len(self._known_classes)} ({len(self._known_classes)}-{len(self._class_names)-1})")
+        # Split classes into known and unknown
+        self._known_classes = list(range(0, self._known_classes_end))  # 0-74
+        self._unknown_classes = list(range(self._known_classes_end, self._num_classes))  # 75-149
 
-    @classmethod
-    def from_config(cls, cfg, dataset_name, distributed, output_dir=None):
-
-        ret = {
-            "dataset_name": dataset_name,
-            "distributed": distributed,
-            "output_dir": output_dir,
-            "prev_intro_cls": cfg.MODEL.SEM_SEG_HEAD.PREV_INTRO_CLS,
-            "cur_intro_cls": cfg.MODEL.SEM_SEG_HEAD.CUR_INTRO_CLS,
-            "unknown_class_index": cfg.MODEL.SEM_SEG_HEAD.UNKNOWN_ID,
-            "ignore_label": cfg.MODEL.SEM_SEG_HEAD.IGNORE_VALUE,
-        }
-        return ret
+        self._logger.info(f"Known classes: {len(self._known_classes)} (0-{self._known_classes_end})")
+        self._logger.info(
+            f"Unknown classes: {len(self._unknown_classes)} ({self._known_classes_end}-{self._num_classes - 1})")
 
     def reset(self):
-        self._conf_matrix = np.zeros((self._num_classes, self._num_classes), dtype=np.int64)
+        # 🔧 수정: confusion matrix 크기를 올바르게 설정 (ignore class 포함)
+        self._conf_matrix = np.zeros((self._num_classes + 1, self._num_classes + 1), dtype=np.int64)
         self._predictions = []
 
     def process(self, inputs, outputs):
@@ -174,20 +176,29 @@ class OWSemSegEvaluator(DatasetEvaluator):
         for input, output in zip(inputs, outputs):
             output = output["sem_seg"].argmax(dim=0).to(self._cpu_device)
             pred = np.array(output, dtype=int)
+
             with PathManager.open(self.input_file_to_gt_file[input["file_name"]], "rb") as f:
                 gt = np.array(Image.open(f), dtype=int)
 
-            # print("[DEBUG] Confusion matrix shape:", self._conf_matrix.shape)
-            # print("[DEBUG] GT unique values:", sorted(np.unique(gt)))
-            # print("[DEBUG] Pred unique values:", sorted(np.unique(pred)))
-            # print("[DEBUG] GT range:", int(gt.min()), "to", int(gt.max()))
-            # print("[DEBUG] Pred range:", int(pred.min()), "to", int(pred.max()))
+            # 🔧 수정: GT의 ignore label을 마지막 클래스로 매핑
+            gt[gt == self._ignore_label] = self._num_classes
 
-            print(f"pred.shape : {pred.shape}, gt.shape : {gt.shape}")
-            print(f"pred.shape : {pred.reshape(-1)}, gt.shape : {gt.reshape(-1)}")
-            assert pred.reshape(-1).shape==gt.reshape(-1).shape, "shape of pred and gt have to be same."
+            # 🔧 NEW: Unknown 클래스 통일 (GT의 75-149 → 150으로 매핑)
+            unknown_mask = (gt >= self._known_classes_end) & (gt < self._num_classes)
+            gt[unknown_mask] = 150  # GT의 unknown classes를 150으로 통일
+
+            # 🔧 수정: 예측값이 유효 범위를 벗어나면 클리핑
+            pred = np.clip(pred, 0, self._num_classes)
+
+            print("[DEBUG] Confusion matrix shape:", self._conf_matrix.shape)
+            print("[DEBUG] GT unique values:", sorted(np.unique(gt)))
+            print("[DEBUG] Pred unique values:", sorted(np.unique(pred)))
+            print("[DEBUG] GT range:", int(gt.min()), "to", int(gt.max()))
+            print("[DEBUG] Pred range:", int(pred.min()), "to", int(pred.max()))
+
+            # 🔧 수정: 올바른 크기로 bincount 수행
             self._conf_matrix += np.bincount(
-                (self._num_classes) * pred.reshape(-1) + gt.reshape(-1),
+                (self._num_classes + 1) * pred.reshape(-1) + gt.reshape(-1),
                 minlength=self._conf_matrix.size,
             ).reshape(self._conf_matrix.shape)
 
@@ -215,56 +226,70 @@ class OWSemSegEvaluator(DatasetEvaluator):
             with PathManager.open(file_path, "w") as f:
                 f.write(json.dumps(self._predictions))
 
-        acc = np.full(self._num_classes, np.nan, dtype=np.float)
-        iou = np.full(self._num_classes, np.nan, dtype=np.float)
-        tp = self._conf_matrix.diagonal().astype(np.float)
-        pos_gt = np.sum(self._conf_matrix, axis=0).astype(np.float)
-        class_weights = pos_gt / np.sum(pos_gt)
-        pos_pred = np.sum(self._conf_matrix, axis=1).astype(np.float)
+        # 🔧 수정: 실제 클래스 수에 맞춰 계산 (ignore class 제외)
+        valid_classes = min(self._num_classes, self._conf_matrix.shape[0] - 1)
+
+        # Calculate metrics for valid classes only
+        acc = np.full(valid_classes, np.nan, dtype=float)
+        iou = np.full(valid_classes, np.nan, dtype=float)
+        tp = self._conf_matrix.diagonal()[:valid_classes].astype(float)
+        pos_gt = np.sum(self._conf_matrix[:valid_classes, :valid_classes], axis=0).astype(float)
+        class_weights = pos_gt / np.sum(pos_gt) if np.sum(pos_gt) > 0 else np.zeros_like(pos_gt)
+        pos_pred = np.sum(self._conf_matrix[:valid_classes, :valid_classes], axis=1).astype(float)
         acc_valid = pos_gt > 0
         acc[acc_valid] = tp[acc_valid] / pos_gt[acc_valid]
         iou_valid = (pos_gt + pos_pred) > 0
         union = pos_gt + pos_pred - tp
-        iou[acc_valid] = tp[acc_valid] / union[acc_valid]
-        macc = np.sum(acc[acc_valid]) / np.sum(acc_valid)
-        miou = np.sum(iou[acc_valid]) / np.sum(iou_valid)
-        fiou = np.sum(iou[acc_valid] * class_weights[acc_valid])
-        pacc = np.sum(tp) / np.sum(pos_gt)
-        seen_IoU = 0
-        unseen_IoU = 0
-        seen_acc = 0
-        unseen_acc = 0
+        iou[iou_valid] = tp[iou_valid] / union[iou_valid]
+
+        # Overall metrics
+        macc = np.sum(acc[acc_valid]) / np.sum(acc_valid) if np.sum(acc_valid) > 0 else 0.0
+        miou = np.sum(iou[iou_valid]) / np.sum(iou_valid) if np.sum(iou_valid) > 0 else 0.0
+        fiou = np.sum(iou[acc_valid] * class_weights[acc_valid]) if np.sum(acc_valid) > 0 else 0.0
+        pacc = np.sum(tp) / np.sum(pos_gt) if np.sum(pos_gt) > 0 else 0.0
+
+        # Separate metrics for known and unknown classes
+        known_valid = np.array([i in self._known_classes for i in range(valid_classes)]) & iou_valid
+        unknown_valid = np.array([i in self._unknown_classes for i in range(valid_classes)]) & iou_valid
+
+        known_miou = np.sum(iou[known_valid]) / np.sum(known_valid) if np.sum(known_valid) > 0 else 0.0
+        unknown_miou = np.sum(iou[unknown_valid]) / np.sum(unknown_valid) if np.sum(unknown_valid) > 0 else 0.0
+
+        # Harmonic mean
+        if known_miou > 0 and unknown_miou > 0:
+            harmonic_mean = 2 * known_miou * unknown_miou / (known_miou + unknown_miou)
+        else:
+            harmonic_mean = 0.0
+
+        # Build results
         res = {}
         res["mIoU"] = 100 * miou
         res["fwIoU"] = 100 * fiou
-        for i, name in enumerate(self._class_names):
-            res["IoU-{}".format(name)] = 100 * iou[i]
-            if name in self._val_extra_classes:
-                unseen_IoU = unseen_IoU + 100 * iou[i]
-            else:
-                seen_IoU = seen_IoU + 100 * iou[i]
-        unseen_IoU = unseen_IoU / len(self._val_extra_classes)
-        seen_IoU = seen_IoU / (len(self._known_classes))
         res["mACC"] = 100 * macc
         res["pACC"] = 100 * pacc
-        for i, name in enumerate(self._class_names):
+
+        # Open-World specific metrics
+        res["Known_mIoU"] = 100 * known_miou
+        res["Unknown_mIoU"] = 100 * unknown_miou
+        res["Harmonic_Mean"] = 100 * harmonic_mean
+
+        # Per-class IoU and ACC (valid classes only)
+        for i in range(min(len(self._class_names), valid_classes)):
+            name = self._class_names[i]
+            res["IoU-{}".format(name)] = 100 * iou[i]
             res["ACC-{}".format(name)] = 100 * acc[i]
-            if name in self._val_extra_classes:
-                unseen_acc = unseen_acc + 100 * iou[i]
-            else:
-                seen_acc = seen_acc + 100 * iou[i]
-        unseen_acc = unseen_acc / len(self._val_extra_classes)
-        seen_acc = seen_acc / (len(self._known_classes))
-        res["seen_IoU"] = seen_IoU
-        res["unseen_IoU"] = unseen_IoU
-        res["harmonic mean"] = 2 * seen_IoU * unseen_IoU / (seen_IoU + unseen_IoU)
-        # res["unseen_acc"] = unseen_acc
-        # res["seen_acc"] = seen_acc
+
         if self._output_dir:
             file_path = os.path.join(self._output_dir, "sem_seg_evaluation.pth")
             with PathManager.open(file_path, "wb") as f:
                 torch.save(res, f)
+
         results = OrderedDict({"sem_seg": res})
+        self._logger.info("=== Open-World Semantic Segmentation Results ===")
+        self._logger.info(f"Overall mIoU: {res['mIoU']:.2f}")
+        self._logger.info(f"Known Classes mIoU: {res['Known_mIoU']:.2f}")
+        self._logger.info(f"Unknown Classes mIoU: {res['Unknown_mIoU']:.2f}")
+        self._logger.info(f"Harmonic Mean: {res['Harmonic_Mean']:.2f}")
         self._logger.info(results)
         return results
 
@@ -327,7 +352,7 @@ from cat_seg import (
 )
 
 
-class Trainer(DefaultTrainer):
+class _Trainer(DefaultTrainer):
     """
     Extension of the Trainer class adapted to DETR.
     """
@@ -392,10 +417,10 @@ class Trainer(DefaultTrainer):
         if evaluator_type == "ow_sem_seg":
             evaluator_list.append(
                 OWSemSegEvaluator(
-                    cfg,
                     dataset_name,
                     distributed=True,
                     output_dir=output_folder,
+                    known_classes_end=cfg.MODEL.SEM_SEG_HEAD.UNKNOWN_CLS, # 75
                 )
             )
 
@@ -615,6 +640,7 @@ def main(args):
 
     res = trainer.train()  # 훈련 실행
 
+    # 👈 [수정 포인트] 아래 파일 저장 코드 블록 전체 추가
     if cfg.MODEL.SEM_SEG_HEAD.DISTRIBUTIONS is not None:
         if comm.is_main_process():  # 분산 학습 시 메인 프로세스에서만 저장하도록 함
             print("Saving distributions to file...")

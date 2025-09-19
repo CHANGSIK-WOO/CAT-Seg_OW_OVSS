@@ -10,7 +10,7 @@ MODEL:
 
     #NUM_CLASSES: 171
     NUM_CLASSES_TRAIN: 171
-    NUM_CLASSES_TEST: 150
+    NUM_CLASSES_TEST: 151 #ADE20K-150 + 1 (UNKNOWN)
 
     TRAIN_CLASS_JSON: "datasets/coco.json"
     TEST_CLASS_JSON: "datasets/ade150.json"
@@ -37,9 +37,9 @@ MODEL:
     #ow-ovss new
     EMBEDDING_PATH: "data/coco/cls_embeddings.npy"
     ATT_EMBEDDINGS: "data/coco/att_embeddings.pth"
-    PREV_INTRO_CLS: 0    # PREVIOUS TEST TASK'S CLASS NUM
-    CUR_INTRO_CLS: 75    # CURRENT TEST TASK'S CLASS NUM
-    UNKNOWN_ID: 150      # TEST DATASET'S UNKNOWN ID (EQUAL TO TEST DATASET'S NUM)
+    PREV_INTRO_CLS: 0    # Start of known classes (Always 0)
+    #CUR_INTRO_CLS: 75    # Start of unknown classes (0~
+    UNKNOWN_CLS: 75      # First unknown class index (class 75~149 will be mapped to unknown)
     THR: 0.75           # Threshold for attribute prediction
     ALPHA: 0.3          # Alpha for attribute selection
     USE_SIGMOID: True
