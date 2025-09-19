@@ -307,8 +307,7 @@ class OWCATSegPredictor(nn.Module):
         # print(f"  unknown_score.max(): {unknown_score.max():.3f}")
 
         # Construct final output: [B, 151, H, W]
-        padding = torch.full((B, 75, H, W), -100.0, device=known_logits.device, dtype=known_logits.dtype)
-        final_output = torch.cat([known_logits, padding, unknown_score], dim=1)
+        final_output = torch.cat([known_logits, unknown_score], dim=1)
 
         # 🔧 디버깅 코드 9: 최종 출력 확인
         # print(f"[DEBUG 9] Final output construction:")
