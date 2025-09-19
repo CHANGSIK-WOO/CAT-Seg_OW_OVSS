@@ -185,8 +185,6 @@ class OWCATSeg(nn.Module):
         res5 = rearrange(self.layers[1][1:, :, :], "(H W) B C -> B C H W", H=self.h, W=self.w)
         res5 = self.upsample2(res5)
 
-
-
         features = {'res5': res5, 'res4': res4, 'res3': res3,}
 
         outputs = self.sem_seg_head(clip_features, features)
@@ -238,6 +236,7 @@ class OWCATSeg(nn.Module):
 
     @torch.no_grad()
     def inference_sliding_window(self, batched_inputs, kernel=384, overlap=0.333, out_res=[640, 640]):
+        print("start inference_sliding_window")
         images = [x["image"].to(self.device, dtype=torch.float32) for x in batched_inputs]
         stride = int(kernel * (1 - overlap))
         unfold = nn.Unfold(kernel_size=kernel, stride=stride)

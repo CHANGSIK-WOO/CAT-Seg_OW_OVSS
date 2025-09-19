@@ -330,7 +330,7 @@ class OWCATSegHead(nn.Module):
                 att_scores_valid = att_scores[b][:, valid_mask]  # C x N
 
                 # Determine positive/negative based on known classes
-                positive = (gt_labels_valid < self.unknown_cls) & (gt_labels_valid >= self.prev_intro_cls)
+                positive = (gt_labels_valid < self.unknown_class_index) & (gt_labels_valid >= self.prev_intro_cls + self.cur_intro_cls)
 
                 if positive.any():
                     positive_scores = att_scores_valid[:, positive].T  # N_pos x C
