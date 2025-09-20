@@ -257,7 +257,7 @@ class OWSemSegEvaluator(DatasetEvaluator):
         total_pixels = np.sum(pos_pred)
         unknown_pixels = pos_pred[150] if len(pos_pred) > 150 else 0
         print(
-            f"[DEBUG] Unknown(150) Predict Ratio: {unknown_pixels / total_pixels * 100:.1f}% ({int(unknown_pixels)} / {int(total_pixels)})")
+            f"[DEBUG] Unknown(150) Predict Ratio: {int(unknown_pixels) / int(total_pixels) * 100:.1f}% ({int(unknown_pixels)} / {int(total_pixels)})")
 
         # CAT-Seg + OW-OVD Unknown mIoU
         known_classes_end = self._num_seen_classes  # 75

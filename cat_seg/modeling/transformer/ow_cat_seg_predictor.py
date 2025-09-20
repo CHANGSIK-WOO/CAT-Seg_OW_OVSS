@@ -44,11 +44,13 @@ class OWCATSegPredictor(nn.Module):
         attention_type: str,
 
         # ow-ovdd new
+        prev_intro_cls: int = None,
+        cur_intro_cls: int = None,
         unknown_class_index: int = None,
+        ignore_label: int = None,
         top_k: int = None,
-        num_classes_train: int = 170,
-        num_classes_test: int = 151,  # NEW: Total number of classes (150 ADE20K + 1 unknown)
-
+        num_classes_train: int = None,
+        num_classes_test: int = None,  # NEW: Total number of classes (150 ADE20K + 1 unknown)
     ):
         """
         Args:
@@ -102,7 +104,10 @@ class OWCATSegPredictor(nn.Module):
         self.clip_preprocess = clip_preprocess
 
         # OW-OVD specific
+        self.prev_intro_cls = prev_intro_cls
+        self.cur_intro_cls = cur_intro_cls
         self.unknown_class_index = unknown_class_index
+        self.ignore_label = ignore_label
         self.top_k = top_k
         self.num_classes_train = num_classes_train
         self.num_classes_test = num_classes_test
@@ -160,56 +165,27 @@ class OWCATSegPredictor(nn.Module):
         ret["attention_type"] = cfg.MODEL.SEM_SEG_HEAD.ATTENTION_TYPE
 
         # OW-OVD parameters
+        ret["prev_intro_cls"] = cfg.MODEL.SEM_SEG_HEAD.PREV_INTRO_CLS
+        ret["cur_intro_cls"] = cfg.MODEL.SEM_SEG_HEAD.CUR_INTRO_CLS
         ret["unknown_class_index"] = cfg.MODEL.SEM_SEG_HEAD.UNKNOWN_ID
+        ret["ignore_label"] = cfg.MODEL.SEM_SEG_HEAD.IGNORE_VALUE
         ret["top_k"] = cfg.MODEL.SEM_SEG_HEAD.TOP_K
         ret["num_classes_train"] = cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES_TRAIN
         ret["num_classes_test"] = cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES_TEST
 
         return ret
 
-    # def forward(self, x, vis_guidance, prompt=None, gt_cls=None, att_embeddings=None, fusion_att=False):
-    #     vis = [vis_guidance[k] for k in vis_guidance.keys()][::-1]
-    #     text = self.class_texts if self.training else self.test_class_texts
-    #     text = [text[c] for c in gt_cls] if gt_cls is not None else text
-    #     text = self.get_text_embeds(text, self.prompt_templates, self.clip_model, prompt)
-    #
-    #     text = text.repeat(x.shape[0], 1, 1, 1)
-    #
-    #     # Get known class predictions
-    #     known_logits = self.transformer(x, text, vis)
-    #
-    #     # Handle attribute embeddings for unknown prediction
-    #     if att_embeddings is not None and not self.training:
-    #         # Process attribute embeddings
-    #         if fusion_att:
-    #             # Fusion mode: attributes are already in text features
-    #             num_att = att_embeddings.shape[0]
-    #             att_text = text[:, -num_att:, :, :]
-    #             text = text[:, :-num_att, :, :]
-    #         else:
-    #             # Separate mode: encode attributes separately
-    #             att_text = self.get_text_embeds(
-    #                 ["attribute"] * att_embeddings.shape[0],  # Dummy text for attributes
-    #                 self.prompt_templates,
-    #                 self.clip_model,
-    #                 None
-    #             )
-    #             # Replace with actual attribute embeddings
-    #             att_text = att_embeddings[None].repeat(x.shape[0], 1, 1, 1)
-    #
-    #         # Get attribute predictions
-    #         att_logits = self.transformer(x, att_text, vis)
-    #
-    #         # Combine known and unknown predictions
-    #         combined_logits = self.predict_unknown(known_logits, att_logits)
-    #
-    #         return combined_logits
-    #
-    #     return known_logits
-
-    def forward(self, x, vis_guidance, prompt=None, gt_cls=None, att_embeddings=None,
-                fusion_att=False, enable_ow_mode=True, is_training=True,
-                num_classes_train=171, num_classes_test=151):
+    def forward(self,
+                x,
+                guidance_features,
+                prompt=None,
+                gt_cls=None,
+                att_embeddings=None,
+                fusion_att=False,
+                enable_ow_mode=False,
+                training=False,
+                num_classes_train=None,
+                num_classes_test=None):
         # 🔧 디버깅 코드 1: 매개변수 확인
         # print(f"\n[DEBUG 1] OWCATSegPredictor.forward called:")
         # print(f"  self.training: {self.training}")
@@ -218,8 +194,8 @@ class OWCATSegPredictor(nn.Module):
         # if att_embeddings is not None:
         #     print(f"  att_embeddings.shape: {att_embeddings.shape}")
         # print(f"  fusion_att: {fusion_att}")
-
-        vis = [vis_guidance[k] for k in vis_guidance.keys()][::-1]
+        print(f"gt_cls : {gt_cls}")
+        vis = [guidance_features[k] for k in guidance_features.keys()][::-1]
         text = self.class_texts if self.training else self.test_class_texts[:self.unknown_class_index]
 
         # 🔧 디버깅 코드 2: 텍스트 처리 확인
@@ -233,11 +209,15 @@ class OWCATSegPredictor(nn.Module):
 
         text = [text[c] for c in gt_cls] if gt_cls is not None else text
         text = self.get_text_embeds(text, self.prompt_templates, self.clip_model, prompt)
+        print(f"text.shape : {text.shape}")
 
-        text = text.repeat(x.shape[0], 1, 1, 1)
+        #text = text.repeat(x.shape[0], 1, 1, 1)
+        text = text.expand(x.shape[0], -1, -1, -1)
+        print(f"text.shape after expanding : {text.shape}")
 
         # Get known class predictions
-        logits = self.transformer(x, text, vis)
+        ovss_logits = self.transformer(x, text, vis)
+        print(f"ovss_logits.shape : {ovss_logits.shape}")
 
         # 🔧 디버깅 코드 3: 첫 번째 transformer 결과 확인
         # print(f"[DEBUG 3] First transformer output:")
@@ -247,10 +227,10 @@ class OWCATSegPredictor(nn.Module):
         # print(f"  logits.argmax() range: {logits.argmax(dim=1).min()}-{logits.argmax(dim=1).max()}")
 
         # 🔧 OW mode 처리
-        if not self.training and enable_ow_mode and att_embeddings is not None:
+        if not self.training and enable_ow_mode and att_embeddings is not None: # OV + OW Mode
             # 🔧 디버깅 코드 4: OW 경로 진입 확인
             # print(f"[DEBUG 4] Entering OW evaluation path")
-            result = self.forward_evaluation_ow(x, vis, logits, att_embeddings, fusion_att)
+            result = self.forward_evaluation_ow(x, vis, ovss_logits, att_embeddings, fusion_att)
             # print(f"[DEBUG 5] OW evaluation result:")
             # print(f"  result.shape: {result.shape}")
             # print(f"  result.min(): {result.min():.3f}")
@@ -258,31 +238,40 @@ class OWCATSegPredictor(nn.Module):
             # print(f"  result.argmax() range: {result.argmax(dim=1).min()}-{result.argmax(dim=1).max()}")
             return result
 
-        elif not self.training and not enable_ow_mode:
+        elif not self.training and not enable_ow_mode: # OV Mode
             # print(f"[DEBUG] Using baseline evaluation")
-            return self.forward_evaluation_baseline(logits)
+            return self.forward_evaluation_baseline(ovss_logits)
         else:
             # print(f"[DEBUG] Returning training logits")
-            return logits
+            return ovss_logits
 
-    def forward_evaluation_ow(self, x, vis, known_logits, att_embeddings, fusion_att):
+    def forward_evaluation_ow(self, 
+                              x, 
+                              vis, 
+                              ovss_logits, 
+                              att_embeddings, 
+                              fusion_att):
         """
         🔧 OW mode evaluation: 151개 클래스 출력
         """
         # 🔧 디버깅 코드 6: forward_evaluation_ow 진입 확인
         # print(f"\n[DEBUG 6] forward_evaluation_ow called:")
-        B, C_known, H, W = known_logits.shape
-        # print(f"  known_logits.shape: {known_logits.shape}")
+        print("forward_evaluation_ow")
+        B, C_ovss, H, W = ovss_logits.shape
+        # print(f"  ovss_logits.shape: {ovss_logits.shape}")
         # print(f"  att_embeddings.shape: {att_embeddings.shape}")
         # print(f"  fusion_att: {fusion_att}")
 
         # Process attribute embeddings
         if fusion_att:
             num_att = att_embeddings.shape[0]
-            att_text = att_embeddings.unsqueeze(0).unsqueeze(2).repeat(B, 1, 1, 1)
+            #att_text = att_embeddings.unsqueeze(0).unsqueeze(2).repeat(B, 1, 1, 1)
+            att_text = att_embeddings.unsqueeze(0).unsqueeze(2).expand(x.shape[0], -1, 1, -1)
             # print(f"[DEBUG] Using fusion_att mode")
         else:
-            att_text = att_embeddings.unsqueeze(0).unsqueeze(2).repeat(B, 1, 1, 1)
+            #att_text = att_embeddings.unsqueeze(0).unsqueeze(2).repeat(B, 1, 1, 1)
+            att_text = att_embeddings.unsqueeze(0).unsqueeze(2).expand(x.shape[0], -1, 1, -1)
+            print(f"att_text.shape after expanding : {att_text.shape}")
         #     print(f"[DEBUG] Using separate mode")
         #
         # print(f"  att_text.shape: {att_text.shape}")
@@ -298,8 +287,7 @@ class OWCATSegPredictor(nn.Module):
         # print(f"  att_logits.argmax() range: {att_logits.argmax(dim=1).min()}-{att_logits.argmax(dim=1).max()}")
 
         # 🔧 핵심 수정: att_logits를 unknown_score로 변환
-        unknown_score = self.predict_unknown(known_logits, att_logits)
-
+        final_output = self.predict_unknown(ovss_logits, att_logits)
         # 🔧 디버깅 코드 8: predict_unknown 결과 확인
         # print(f"[DEBUG 8] predict_unknown result:")
         # print(f"  unknown_score.shape: {unknown_score.shape}")
@@ -307,28 +295,27 @@ class OWCATSegPredictor(nn.Module):
         # print(f"  unknown_score.max(): {unknown_score.max():.3f}")
 
         # Construct final output: [B, 151, H, W]
-        final_output = torch.cat([known_logits, unknown_score], dim=1)
-
         # 🔧 디버깅 코드 9: 최종 출력 확인
         # print(f"[DEBUG 9] Final output construction:")
-        # print(f"  known_logits.shape: {known_logits.shape}")
+        # print(f"  ovss_logits.shape: {ovss_logits.shape}")
         # print(f"  padding.shape: {padding.shape}")
         # print(f"  unknown_score.shape: {unknown_score.shape}")
         # print(f"  final_output.shape: {final_output.shape}")
         # print(f"  final_output.argmax() range: {final_output.argmax(dim=1).min()}-{final_output.argmax(dim=1).max()}")
-
+        # final_output[:,-1,:,:] = -1000
         return final_output
 
-    def forward_evaluation_baseline(self, known_logits):
+    def forward_evaluation_baseline(self, ovss_logits):
         """
-        🔧 Baseline mode evaluation: 151개 클래스 출력 (OW 없음)
+        Baseline mode evaluation
         """
-        B, C_known, H, W = known_logits.shape  # [B, 75, H, W]
+        # B, C_ovss, H, W = ovss_logits.shape  # [B, 75, H, W]
 
         # Fill remaining classes with very low scores
-        padding = torch.full((B, 75, H, W), -100.0, device=known_logits.device, dtype=known_logits.dtype)
-        unknown_padding = torch.full((B, 1, H, W), -100.0, device=known_logits.device, dtype=known_logits.dtype)
-        baseline_output = torch.cat([known_logits, padding, unknown_padding], dim=1)  # [B, 151, H, W]
+        # padding = torch.full((B, 75, H, W), -100.0, device=ovss_logits.device, dtype=ovss_logits.dtype)
+        unknown_padding = torch.full((B, 1, H, W), -100.0, device=ovss_logits.device, dtype=ovss_logits.dtype)
+        # baseline_output = torch.cat([ovss_logits, padding, unknown_padding], dim=1)  # [B, 151, H, W]
+        baseline_output = torch.cat([ovss_logits, unknown_padding], dim=1)  # [B, 151, H, W]
 
         return baseline_output
 
@@ -343,20 +330,20 @@ class OWCATSegPredictor(nn.Module):
     #     text_embeddings = text_embeddings.repeat(x.shape[0], 1, 1, 1)
     #
     #     # Get known class predictions (0-74)
-    #     known_logits = self.transformer(x, text_embeddings, vis)  # [B, 75, H, W]
-    #     B, _, H, W = known_logits.shape
+    #     ovss_logits = self.transformer(x, text_embeddings, vis)  # [B, 75, H, W]
+    #     B, _, H, W = ovss_logits.shape
     #
     #     if enable_ow_mode and att_embeddings is not None:
     #         # OW Mode: Use attributes to predict unknown class
     #         att_text = att_embeddings.unsqueeze(0).unsqueeze(2).repeat(B, 1, 1, 1)
     #         att_logits = self.transformer(x, att_text, vis)  # [B, 1711, H, W]
-    #         combined_logits = self.predict_unknown_for_evaluation(known_logits, att_logits)
+    #         combined_logits = self.predict_unknown_for_evaluation(ovss_logits, att_logits)
     #         return combined_logits  # [B, 151, H, W]
     #     else:
     #         # Baseline Mode: Fill remaining classes with low scores
-    #         unknown_padding = torch.full((B, 75, H, W), -100.0, device=known_logits.device, dtype=known_logits.dtype)
-    #         final_unknown = torch.full((B, 1, H, W), -100.0, device=known_logits.device, dtype=known_logits.dtype)
-    #         baseline_logits = torch.cat([known_logits, unknown_padding, final_unknown], dim=1)  # [B, 151, H, W]
+    #         unknown_padding = torch.full((B, 75, H, W), -100.0, device=ovss_logits.device, dtype=ovss_logits.dtype)
+    #         final_unknown = torch.full((B, 1, H, W), -100.0, device=ovss_logits.device, dtype=ovss_logits.dtype)
+    #         baseline_logits = torch.cat([ovss_logits, unknown_padding, final_unknown], dim=1)  # [B, 151, H, W]
     #         return baseline_logits
 
 
@@ -462,10 +449,10 @@ class OWCATSegPredictor(nn.Module):
 
         return class_embeddings
 
-    def calculate_uncertainty(self, known_logits):
+    def calculate_uncertainty(self, ovss_logits):
         """Calculate uncertainty for known classes."""
-        known_logits = torch.clamp(known_logits, 1e-6, 1 - 1e-6)
-        entropy = (-known_logits * torch.log(known_logits) - (1 - known_logits) * torch.log(1 - known_logits)).mean(
+        ovss_logits = torch.clamp(ovss_logits, 1e-6, 1 - 1e-6)
+        entropy = (-ovss_logits * torch.log(ovss_logits) - (1 - ovss_logits) * torch.log(1 - ovss_logits)).mean(
             dim=-1, keepdim=True)
         return entropy
 
@@ -476,35 +463,39 @@ class OWCATSegPredictor(nn.Module):
         weighted_average = torch.sum(top_k_scores * top_k_weights, dim=-1, keepdim=True)
         return weighted_average
 
-    def predict_unknown(self, known_logits, unknown_logits):
+    def predict_unknown(self, ovss_logits, att_logits):
         """
         Predict unknown class scores for OW evaluation.
 
         Args:
-            known_logits: [B, 75, H, W] - predictions for known classes (0-74)
-            unknown_logits: [B, 1711, H, W] - attribute predictions
+            ovss_logits: [B, 75, H, W] - predictions for known classes (0-74)
+            unovss_logits: [B, 1711, H, W] - attribute predictions
 
         Returns:
             combined_logits: [B, 151, H, W] - 75 known + 75 unknown padding + 1 unknown class
         """
-        B, C_known, H, W = known_logits.shape
+        B, C_known, H, W = ovss_logits.shape
+        print("predict_unknown")
+        print(f"ovss_logits.shape : {ovss_logits.shape}, att_logits.shape : {att_logits.shape}")
 
         # Apply sigmoid to get probabilities
-        known_probs = known_logits.sigmoid()
-        unknown_probs = unknown_logits.sigmoid()
+        known_logits = ovss_logits.sigmoid().permute(0,2,3,1) # [B,C,H,W]-->[B,H,W,C]
+        unknown_logits = att_logits.sigmoid().permute(0,2,3,1) # [B,C,H,W]-->[B,H,W,C]
 
         # Calculate uncertainty for known classes
-        uncertainty = self.calculate_uncertainty(known_probs.permute(0, 2, 3, 1))  # B, H, W, 1
+        uncertainty = self.calculate_uncertainty(known_logits)  # B, H, W, 1
 
         # Compute weighted top-k attributes
-        unknown_probs_perm = unknown_probs.permute(0, 2, 3, 1)  # B, H, W, C_att
-        top_k_att_score = self.compute_weighted_top_k_attributes(unknown_probs_perm, k=self.top_k)  # B, H, W, 1
-
+        top_k_att_score = self.compute_weighted_top_k_attributes(unknown_logits, k=self.top_k)  # B, H, W, 1
+        print(f"top_k_att_score.shape : {top_k_att_score.shape}")
         # Fusion with uncertainty
-        known_max = known_probs.max(dim=1, keepdim=True)[0]  # B, 1, H, W
-        unknown_score = (top_k_att_score.permute(0, 3, 1, 2) + uncertainty.permute(0, 3, 1, 2)) / 2 * (1 - known_max)
+        #known_max = known_probs.max(dim=1, keepdim=True)[0]
+        known_max = known_logits.max(dim=-1, keepdim=True)[0]
+        unknown_logits_final = (top_k_att_score + uncertainty) / 2 * (1 - known_max)
+        print(f"unknown_logits_final.shape : {unknown_logits_final.shape}")
+        ret_logits = torch.cat([known_logits, unknown_logits_final], dim=-1).permute(0, 3, 1, 2)
 
         # # Concatenate known and unknown predictions
-        # combined_logits = torch.cat([known_logits, unknown_score], dim=1)  # B, C_known+1, H, W
+        # combined_logits = torch.cat([ovss_logits, unknown_score], dim=1)  # B, C_known+1, H, W
 
-        return unknown_score
+        return ret_logits

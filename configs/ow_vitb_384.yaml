@@ -10,7 +10,7 @@ MODEL:
 
     #NUM_CLASSES: 171
     NUM_CLASSES_TRAIN: 171
-    NUM_CLASSES_TEST: 151 #ADE20K-150 + 1 (UNKNOWN)
+    NUM_CLASSES_TEST: 150
 
     TRAIN_CLASS_JSON: "datasets/coco.json"
     TEST_CLASS_JSON: "datasets/ade150.json"
@@ -37,9 +37,9 @@ MODEL:
     #ow-ovss new
     EMBEDDING_PATH: "data/coco/cls_embeddings.npy"
     ATT_EMBEDDINGS: "data/coco/att_embeddings.pth"
-    PREV_INTRO_CLS: 0    # Start of known classes (Always 0)
-    #CUR_INTRO_CLS: 75    # Start of unknown classes (0~
-    UNKNOWN_CLS: 75      # First unknown class index (class 75~149 will be mapped to unknown)
+    PREV_INTRO_CLS: 0    # PREVIOUS TEST TASK'S CLASS NUM
+    CUR_INTRO_CLS: 75    # CURRENT TEST TASK'S CLASS NUM
+    UNKNOWN_ID: 150      # TEST DATASET'S UNKNOWN ID (EQUAL TO TEST DATASET'S NUM)
     THR: 0.75           # Threshold for attribute prediction
     ALPHA: 0.3          # Alpha for attribute selection
     USE_SIGMOID: True
@@ -68,18 +68,18 @@ INPUT:
     SIZE: (384, 384)
   SIZE_DIVISIBILITY: 384 
   FORMAT: "RGB"
-  DATASET_MAPPER_NAME: "mask_former_semantic"
+  DATASET_MAPPER_NAME: "ow_mask_former_semantic"
 
 SOLVER:
-  IMS_PER_BATCH: 2 # 4->2
+  IMS_PER_BATCH: 4 # 4->2
   LR_SCHEDULER_NAME: WarmupCosineLR
   BASE_LR: 0.0002
-  MAX_ITER: 100 #80000->100
+  MAX_ITER: 20000 #80000->100
   BACKBONE_MULTIPLIER: 0.0
   CLIP_MULTIPLIER: 0.01
 
 TEST:
-  EVAL_PERIOD: 100 #5000->100
+  EVAL_PERIOD: 0 #5000->100
 
 
 ATTRIBUTE_LOG_START_ITER: 50    # ← 이 값이 실제로 사용됨

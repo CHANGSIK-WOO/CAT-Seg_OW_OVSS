@@ -156,7 +156,7 @@ class CATSeg(nn.Module):
         res5 = self.upsample2(res5)
         features = {'res5': res5, 'res4': res4, 'res3': res3,}
 
-        outputs = self.sem_seg_head(clip_features, features)
+        outputs = self.sem_seg_head(clip_features, features) # [B, 151, H, W]
         if self.training:
             targets = torch.stack([x["sem_seg"].to(self.device) for x in batched_inputs], dim=0)
             outputs = F.interpolate(outputs, size=(targets.shape[-2], targets.shape[-1]), mode="bilinear", align_corners=False)

@@ -89,7 +89,7 @@ class OWMaskFormerSemanticDatasetMapper:
             "is_train": is_train,
             "augmentations": augs,
             "image_format": cfg.INPUT.FORMAT,
-            "ignore_label": cfg.SEM_SEG_HEAD.IGNORE_VALUE,
+            "ignore_label": cfg.MODEL.SEM_SEG_HEAD.IGNORE_VALUE,
             "size_divisibility": cfg.INPUT.SIZE_DIVISIBILITY,
         }
         return ret
