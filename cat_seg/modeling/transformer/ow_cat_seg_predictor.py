@@ -351,24 +351,28 @@ class OWCATSegPredictor(nn.Module):
         weighted_average = torch.sum(top_k_scores * top_k_weights, dim=-1, keepdim=True)
         return weighted_average
 
+
     def predict_unknown(self, ovss_logits, att_logits):
         B, C_known, H, W = ovss_logits.shape
 
-        known_sigmoid = ovss_logits.sigmoid()  # B, C, H, W
-        unknown_sigmoid = att_logits.sigmoid()  # B, C_att, H, W
+        known_sigmoid = ovss_logits.sigmoid()
+        unknown_sigmoid = att_logits.sigmoid()
 
         known_probs_clamped = torch.clamp(known_sigmoid, 1e-6, 1 - 1e-6)
         entropy = (-known_probs_clamped * torch.log(known_probs_clamped) -
                    (1 - known_probs_clamped) * torch.log(1 - known_probs_clamped))
-        uncertainty = entropy.mean(dim=1, keepdim=True)  # B, 1, H, W
+        uncertainty = entropy.mean(dim=1, keepdim=True)
 
-        top_k_scores, _ = unknown_sigmoid.topk(self.top_k, dim=1)  # B, top_k, H, W
+        top_k_scores, _ = unknown_sigmoid.topk(self.top_k, dim=1)
         top_k_weights = F.softmax(top_k_scores, dim=1)
-        weighted_average = (top_k_scores * top_k_weights).sum(dim=1, keepdim=True)  # B, 1, H, W
+        weighted_average = (top_k_scores * top_k_weights).sum(dim=1, keepdim=True)
 
-        known_max = known_sigmoid.max(dim=1, keepdim=True)[0]  # B, 1, H, W
+        known_max = known_sigmoid.max(dim=1, keepdim=True)[0]
         unknown_score = (weighted_average + uncertainty) / 2 * (1 - known_max)
 
-        ret_logits = torch.cat([ovss_logits, unknown_score], dim=1)  # ✅ permute 없음
+        unknown_prob = unknown_score.clamp(1e-6, 1 - 1e-6)
+        unknown_logit = torch.log(unknown_prob) - torch.log(1 - unknown_prob)  # logit(p) = log(p/(1-p))
+
+        ret_logits = torch.cat([ovss_logits, unknown_logit], dim=1)
 
         return ret_logits
