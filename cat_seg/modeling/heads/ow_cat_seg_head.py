@@ -316,13 +316,14 @@ class OWCATSegHead(nn.Module):
         if not self.training or self.positive_distributions is None or self.att_embeddings is None:
             return
 
+        att_scores = att_scores.float()
         B, C, H, W = att_scores.shape
         att_scores = att_scores.sigmoid()
 
         for b in range(B):
             for idx, thr in enumerate(self.thrs):
                 # Process only valid regions
-                valid_mask = (gt_labels[b] != self.ignore_value)
+                valid_mask = (gt_labels[b] != self.ignore_label)
                 if not valid_mask.any():
                     continue
 

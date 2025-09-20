@@ -38,6 +38,7 @@ class OWCATSeg(nn.Module):
         #ow-ovss new
         unknown_class_index: int = None,
         crop_size:int = None,
+        ignore_label: int = None,
 
     ):
         """
@@ -106,6 +107,8 @@ class OWCATSeg(nn.Module):
         self.layers = []
         for l in self.layer_indexes:
             self.sem_seg_head.predictor.clip_model.visual.transformer.resblocks[l].register_forward_hook(lambda m, _, o: self.layers.append(o))
+        
+        self.ignore_label = ignore_label
 
 
 
@@ -115,6 +118,7 @@ class OWCATSeg(nn.Module):
         sem_seg_head = build_sem_seg_head(cfg, None)
         
         return {
+
             "backbone": backbone,
             "sem_seg_head": sem_seg_head,
             "size_divisibility": cfg.MODEL.MASK_FORMER.SIZE_DIVISIBILITY,
@@ -129,7 +133,8 @@ class OWCATSeg(nn.Module):
             "backbone_multiplier": cfg.SOLVER.BACKBONE_MULTIPLIER,
             "clip_pretrained": cfg.MODEL.SEM_SEG_HEAD.CLIP_PRETRAINED,
             "unknown_class_index": cfg.MODEL.SEM_SEG_HEAD.UNKNOWN_ID,
-            "crop_size" : cfg.INPUT.CROP.SIZE,
+            "crop_size": cfg.INPUT.CROP.SIZE,
+            "ignore_label": cfg.MODEL.SEM_SEG_HEAD.IGNORE_VALUE,
         }
 
     @property
@@ -157,119 +162,121 @@ class OWCATSeg(nn.Module):
                     The prediction has shape KxHxW that represents the logits of
                     each class for each pixel.
         """
-        
-        images = [x["image"].to(self.device) for x in batched_inputs]
-        if not self.training and self.sliding_window:
-            return self.inference_sliding_window(batched_inputs)
+        with torch.cuda.amp.autocast(enabled=True):
+            images = [x["image"].to(self.device) for x in batched_inputs]
+            if not self.training and self.sliding_window:
+                return self.inference_sliding_window(batched_inputs)
 
-        clip_images = [(x - self.clip_pixel_mean) / self.clip_pixel_std for x in images]
-        clip_images = ImageList.from_tensors(clip_images, self.size_divisibility)
+            clip_images = [(x - self.clip_pixel_mean) / self.clip_pixel_std for x in images]
+            clip_images = ImageList.from_tensors(clip_images, self.size_divisibility)
 
-        self.layers = []
+            self.layers = []
 
-        clip_images_resized = F.interpolate(clip_images.tensor, size=self.clip_resolution, mode='bilinear', align_corners=False, )
-        clip_features = self.sem_seg_head.predictor.clip_model.encode_image(clip_images_resized, dense=True)
+            clip_images_resized = F.interpolate(clip_images.tensor, size=self.clip_resolution, mode='bilinear', align_corners=False, )
+            clip_features = self.sem_seg_head.predictor.clip_model.encode_image(clip_images_resized, dense=True)
 
-        image_features = clip_features[:, 1:, :]
+            image_features = clip_features[:, 1:, :]
 
-        # CLIP ViT features for guidance
-        # res3 = rearrange(image_features, "B (H W) C -> B C H W", H=24)
-        # res4 = rearrange(self.layers[0][1:, :, :], "(H W) B C -> B C H W", H=24)
-        # res4 = self.upsample1(res4)
-        # res5 = rearrange(self.layers[1][1:, :, :], "(H W) B C -> B C H W", H=24)
-        # res5 = self.upsample2(res5)
+            # CLIP ViT features for guidance
+            # res3 = rearrange(image_features, "B (H W) C -> B C H W", H=24)
+            # res4 = rearrange(self.layers[0][1:, :, :], "(H W) B C -> B C H W", H=24)
+            # res4 = self.upsample1(res4)
+            # res5 = rearrange(self.layers[1][1:, :, :], "(H W) B C -> B C H W", H=24)
+            # res5 = self.upsample2(res5)
 
-        res3 = rearrange(image_features, "B (H W) C -> B C H W", H=self.h, W=self.w)
-        res4 = rearrange(self.layers[0][1:, :, :], "(H W) B C -> B C H W", H=self.h, W=self.w)
-        res4 = self.upsample1(res4)
-        res5 = rearrange(self.layers[1][1:, :, :], "(H W) B C -> B C H W", H=self.h, W=self.w)
-        res5 = self.upsample2(res5)
+            res3 = rearrange(image_features, "B (H W) C -> B C H W", H=self.h, W=self.w)
+            res4 = rearrange(self.layers[0][1:, :, :], "(H W) B C -> B C H W", H=self.h, W=self.w)
+            res4 = self.upsample1(res4)
+            res5 = rearrange(self.layers[1][1:, :, :], "(H W) B C -> B C H W", H=self.h, W=self.w)
+            res5 = self.upsample2(res5)
 
-        features = {'res5': res5, 'res4': res4, 'res3': res3,}
+            features = {'res5': res5, 'res4': res4, 'res3': res3,}
 
-        outputs = self.sem_seg_head(clip_features, features)
-        if self.training:
-            # (B, Ht, Wt) GT Concat
-            targets = torch.stack([x["sem_seg"].to(self.device) for x in batched_inputs], dim=0)
-            # resize output --> gt size
-            outputs = F.interpolate(outputs, size=(targets.shape[-2], targets.shape[-1]), mode="bilinear", align_corners=False)
+            outputs = self.sem_seg_head(clip_features, features)
+            if self.training:
+                # (B, Ht, Wt) GT Concat
+                targets = torch.stack([x["sem_seg"].to(self.device) for x in batched_inputs], dim=0)
+                # resize output --> gt size
+                outputs = F.interpolate(outputs, size=(targets.shape[-2], targets.shape[-1]), mode="bilinear", align_corners=False)
 
-            # ow-ovss new
-            # Log distribution for OW-OVD
-            if hasattr(self.sem_seg_head, 'att_embeddings') and self.sem_seg_head.att_embeddings is not None:
-                # Get attribute predictions for logging
-                att_features = self.sem_seg_head.att_embeddings[None].repeat(clip_features.shape[0], 1, 1)
-                att_outputs = self.sem_seg_head.predictor(
-                    rearrange(clip_features[:, 1:, :], "B (H W) C -> B C H W", H=self.h, W=self.w),
-                    features,
-                    None,
-                    None,
-                    att_features,
-                    False)
-                att_outputs = F.interpolate(att_outputs, size=(targets.shape[-2], targets.shape[-1]), mode="bilinear", align_corners=False)
+                # ow-ovss new
+                # Log distribution for OW-OVD
+                if hasattr(self.sem_seg_head, 'att_embeddings') and self.sem_seg_head.att_embeddings is not None:
+                    # Get attribute predictions for logging
+                    att_features = self.sem_seg_head.att_embeddings[None].repeat(clip_features.shape[0], 1, 1)
+                    att_outputs = self.sem_seg_head.predictor(
+                        rearrange(clip_features[:, 1:, :], "B (H W) C -> B C H W", H=self.h, W=self.w),
+                        features,
+                        None,
+                        None,
+                        att_features,
+                        False)
+                    att_outputs = F.interpolate(att_outputs, size=(targets.shape[-2], targets.shape[-1]), mode="bilinear", align_corners=False)
 
-                if self.sem_seg_head.distributions is not None:
-                    self.sem_seg_head.log_distribution(att_outputs, targets, targets != self.sem_seg_head.ignore_value)
+                    if self.sem_seg_head.distributions is not None:
+                        self.sem_seg_head.log_distribution(att_outputs, targets, targets != self.ignore_label)
 
-            num_classes = outputs.shape[1]
-            mask = targets != self.sem_seg_head.ignore_value
+                num_classes = outputs.shape[1]
+                mask = targets != self.ignore_label
 
-            outputs = outputs.permute(0,2,3,1)
-            _targets = torch.zeros(outputs.shape, device=self.device)
-            _onehot = F.one_hot(targets[mask], num_classes=num_classes).float()
-            _targets[mask] = _onehot
-            
-            loss = F.binary_cross_entropy_with_logits(outputs, _targets)
-            losses = {"loss_sem_seg" : loss}
-            return losses
+                outputs = outputs.permute(0,2,3,1)
+                _targets = torch.zeros(outputs.shape, device=self.device)
+                _onehot = F.one_hot(targets[mask], num_classes=num_classes).float()
+                _targets[mask] = _onehot
 
-        else:
-            outputs = outputs.sigmoid()
-            image_size = clip_images.image_sizes[0]
-            height = batched_inputs[0].get("height", image_size[0])
-            width = batched_inputs[0].get("width", image_size[1])
+                loss = F.binary_cross_entropy_with_logits(outputs, _targets)
+                losses = {"loss_sem_seg" : loss}
+                return losses
 
-            output = sem_seg_postprocess(outputs[0], image_size, height, width)
-            processed_results = [{'sem_seg': output}]
-            return processed_results
+            else:
+                outputs = outputs.sigmoid()
+                image_size = clip_images.image_sizes[0]
+                height = batched_inputs[0].get("height", image_size[0])
+                width = batched_inputs[0].get("width", image_size[1])
+
+                output = sem_seg_postprocess(outputs[0], image_size, height, width)
+                processed_results = [{'sem_seg': output}]
+                return processed_results
 
 
     @torch.no_grad()
     def inference_sliding_window(self, batched_inputs, kernel=384, overlap=0.333, out_res=[640, 640]):
         print("start inference_sliding_window")
-        images = [x["image"].to(self.device, dtype=torch.float32) for x in batched_inputs]
-        stride = int(kernel * (1 - overlap))
-        unfold = nn.Unfold(kernel_size=kernel, stride=stride)
-        fold = nn.Fold(out_res, kernel_size=kernel, stride=stride)
 
-        image = F.interpolate(images[0].unsqueeze(0), size=out_res, mode='bilinear', align_corners=False).squeeze()
-        image = rearrange(unfold(image), "(C H W) L-> L C H W", C=3, H=kernel)
-        global_image = F.interpolate(images[0].unsqueeze(0), size=(kernel, kernel), mode='bilinear', align_corners=False)
-        image = torch.cat((image, global_image), dim=0)
+        with torch.cuda.amp.autocast(enabled=False):
+            images = [x["image"].to(self.device, dtype=torch.float32) for x in batched_inputs]
+            stride = int(kernel * (1 - overlap))
+            unfold = nn.Unfold(kernel_size=kernel, stride=stride)
+            fold = nn.Fold(out_res, kernel_size=kernel, stride=stride)
 
-        images = (image - self.pixel_mean) / self.pixel_std
-        clip_images = (image - self.clip_pixel_mean) / self.clip_pixel_std
-        clip_images = F.interpolate(clip_images, size=self.clip_resolution, mode='bilinear', align_corners=False, )
-        
-        self.layers = []
-        clip_features = self.sem_seg_head.predictor.clip_model.encode_image(clip_images, dense=True)
-        res3 = rearrange(clip_features[:, 1:, :], "B (H W) C -> B C H W", H=self.h, W=self.w)
-        res4 = self.upsample1(rearrange(self.layers[0][1:, :, :], "(H W) B C -> B C H W", H=self.h, W=self.w))
-        res5 = self.upsample2(rearrange(self.layers[1][1:, :, :], "(H W) B C -> B C H W", H=self.h, W=self.w))
+            image = F.interpolate(images[0].unsqueeze(0), size=out_res, mode='bilinear', align_corners=False).squeeze()
+            image = rearrange(unfold(image), "(C H W) L-> L C H W", C=3, H=kernel)
+            global_image = F.interpolate(images[0].unsqueeze(0), size=(kernel, kernel), mode='bilinear', align_corners=False)
+            image = torch.cat((image, global_image), dim=0)
 
-        features = {'res5': res5, 'res4': res4, 'res3': res3,}
-        outputs = self.sem_seg_head(clip_features, features)
+            images = (image - self.pixel_mean) / self.pixel_std
+            clip_images = (image - self.clip_pixel_mean) / self.clip_pixel_std
+            clip_images = F.interpolate(clip_images, size=self.clip_resolution, mode='bilinear', align_corners=False, )
 
-        outputs = F.interpolate(outputs, size=kernel, mode="bilinear", align_corners=False)
-        outputs = outputs.sigmoid()
-        
-        global_output = outputs[-1:]
-        global_output = F.interpolate(global_output, size=out_res, mode='bilinear', align_corners=False,)
-        outputs = outputs[:-1]
-        outputs = fold(outputs.flatten(1).T) / fold(unfold(torch.ones([1] + out_res, device=self.device)))
-        outputs = (outputs + global_output) / 2.
+            self.layers = []
+            clip_features = self.sem_seg_head.predictor.clip_model.encode_image(clip_images, dense=True)
+            res3 = rearrange(clip_features[:, 1:, :], "B (H W) C -> B C H W", H=self.h, W=self.w)
+            res4 = self.upsample1(rearrange(self.layers[0][1:, :, :], "(H W) B C -> B C H W", H=self.h, W=self.w))
+            res5 = self.upsample2(rearrange(self.layers[1][1:, :, :], "(H W) B C -> B C H W", H=self.h, W=self.w))
 
-        height = batched_inputs[0].get("height", out_res[0])
-        width = batched_inputs[0].get("width", out_res[1])
-        output = sem_seg_postprocess(outputs[0], out_res, height, width)
-        return [{'sem_seg': output}]
+            features = {'res5': res5, 'res4': res4, 'res3': res3,}
+            outputs = self.sem_seg_head(clip_features, features)
+
+            outputs = F.interpolate(outputs, size=kernel, mode="bilinear", align_corners=False)
+            outputs = outputs.sigmoid()
+
+            global_output = outputs[-1:]
+            global_output = F.interpolate(global_output, size=out_res, mode='bilinear', align_corners=False,)
+            outputs = outputs[:-1]
+            outputs = fold(outputs.flatten(1).T) / fold(unfold(torch.ones([1] + out_res, device=self.device)))
+            outputs = (outputs + global_output) / 2.
+
+            height = batched_inputs[0].get("height", out_res[0])
+            width = batched_inputs[0].get("width", out_res[1])
+            output = sem_seg_postprocess(outputs[0], out_res, height, width)
+            return [{'sem_seg': output}]
