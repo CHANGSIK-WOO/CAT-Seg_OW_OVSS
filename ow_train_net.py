@@ -471,6 +471,82 @@ class Trainer(DefaultTrainer):
         else:
             print("❌ No ATT_EMBEDDINGS specified, skipping OWPipelineHook")
 
+        self.distributions_path = cfg.MODEL.SEM_SEG_HEAD.DISTRIBUTIONS
+
+    def train(self):
+        """✅ 수정: 훈련 완료 즉시 distribution 저장"""
+        try:
+            # 원래 훈련 실행
+            result = super().train()
+
+            # ✅ 훈련 완료 즉시 distribution 저장 (평가 전에)
+            self._save_distributions_immediately()
+
+            return result
+
+        except Exception as e:
+            print(f"❌ Training error: {e}")
+            # 에러 발생 시에도 distribution 저장 시도
+            try:
+                self._save_distributions_immediately()
+            except Exception as save_err:
+                print(f"❌ Failed to save distributions: {save_err}")
+            raise e
+
+    def _save_distributions_immediately(self):
+        """훈련 완료 즉시 distribution 저장"""
+        if not self.distributions_path or not comm.is_main_process():
+            return
+
+        try:
+            print("💾 Attempting to save distributions immediately after training...")
+
+            # 모델에서 distribution 데이터 가져오기
+            model = self.model.module if hasattr(self.model, 'module') else self.model
+
+            if (hasattr(model, 'sem_seg_head') and
+                    hasattr(model.sem_seg_head, 'positive_distributions') and
+                    hasattr(model.sem_seg_head, 'negative_distributions')):
+
+                pos_dist = model.sem_seg_head.positive_distributions
+                neg_dist = model.sem_seg_head.negative_distributions
+
+                if pos_dist is not None and neg_dist is not None:
+                    # distribution 데이터 준비
+                    distributions_data = {
+                        'positive_distributions': pos_dist,
+                        'negative_distributions': neg_dist,
+                        'thresholds': getattr(model.sem_seg_head, 'thrs', [0.75]),
+                        'num_attributes': len(pos_dist[0]) if pos_dist and len(pos_dist) > 0 else 0,
+                        'saved_at': 'immediate_after_training'
+                    }
+
+                    # 디렉토리 생성
+                    import os
+                    os.makedirs(os.path.dirname(self.distributions_path), exist_ok=True)
+
+                    # 저장
+                    torch.save(distributions_data, self.distributions_path)
+                    print(f"✅ Distributions saved immediately to: {self.distributions_path}")
+
+                    # 검증
+                    if os.path.exists(self.distributions_path):
+                        saved_data = torch.load(self.distributions_path, map_location='cpu')
+                        pos_count = saved_data.get('num_attributes', 0)
+                        print(f"📊 Verified: {pos_count} attributes saved successfully")
+                    else:
+                        print("❌ File not found after saving")
+
+                else:
+                    print("⚠️ No distribution data collected during training")
+
+            else:
+                print("⚠️ No distribution attributes found in model")
+
+        except Exception as e:
+            print(f"❌ Error saving distributions immediately: {e}")
+            import traceback
+            traceback.print_exc()
 
     @classmethod
     def build_evaluator(cls, cfg, dataset_name, output_folder=None):
@@ -718,12 +794,31 @@ def main(args):
     trainer.resume_or_load(resume=args.resume)
 
     res = trainer.train()  # 훈련 실행
-
-    # ✅ 훈련 완료 후 한 번만 저장 (기존 코드 유지)
-    dist_path = cfg.MODEL.SEM_SEG_HEAD.DISTRIBUTIONS
-    if dist_path and comm.is_main_process():
-        # ... 기존 distribution 저장 코드 ...
-        print(f"\n💾 Training completed - Final distribution saved: {dist_path}")
+    #
+    # # ✅ 수정: 훈련 실행 (distribution은 train() 메서드에서 자동 저장됨)
+    # try:
+    #     res = trainer.train()
+    #     print("✅ Training completed successfully")
+    # except Exception as e:
+    #     print(f"❌ Training failed: {e}")
+    #     # 에러 발생 시에도 파일 존재 확인
+    #     if os.path.exists(abs_path):
+    #         print(f"✅ Distributions file exists despite error: {abs_path}")
+    #     else:
+    #         print(f"❌ Distributions file not found: {abs_path}")
+    #     raise e
+    #
+    # # ✅ 추가 확인: 파일 생성 검증
+    # if comm.is_main_process():
+    #     if os.path.exists(abs_path):
+    #         print(f"✅ Final verification: Distributions file successfully created at {abs_path}")
+    #         try:
+    #             data = torch.load(abs_path, map_location='cpu')
+    #             print(f"📊 File contains {data.get('num_attributes', 'unknown')} attributes")
+    #         except Exception as e:
+    #             print(f"⚠️ File exists but cannot be loaded: {e}")
+    #     else:
+    #         print(f"❌ Final verification failed: Distributions file not found at {abs_path}")
 
     return res
 

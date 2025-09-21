@@ -720,7 +720,7 @@ class Aggregator(nn.Module):
 
         logit = self.conv_decoder(corr_embed, projected_decoder_guidance)
         if classes is not None:
-            out = torch.full((logit.size(0), orig_clases, logit.size(2), logit.size(3)), -100., device=logit.device)
-            out.scatter_(dim=1, index=classes[..., None, None].expand(-1, -1, logit.size(-2), logit.size(-1)), src=logit)
+            out = torch.full((logit.size(0), orig_clases, logit.size(2), logit.size(3)), -100., device=logit.device, dtype=logit.dtype)
+            out.scatter_(dim=1, index=classes[..., None, None].expand(-1, -1, logit.size(-2), logit.size(-1)), src=logit.to(out.dtype))
             logit = out
         return logit
