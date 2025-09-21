@@ -41,7 +41,67 @@ import json
 
 # from detectron2.evaluation import SemSegGzeroEvaluator
 # from mask_former.evaluation.sem_seg_evaluation_gzero import SemSegGzeroEvaluator
+from detectron2.engine.hooks import HookBase
+import os, torch, torch.distributed as dist
+import detectron2.utils.comm as comm
 
+class SaveDistributionsHook(HookBase):
+    def __init__(self, dist_path, period=50):  # 50 step마다 저장
+        self.dist_path = dist_path
+        self.period = period
+
+    def _sum_hist(self, d):
+        if d is None: return -1.0
+        s = 0.0
+        if isinstance(d, list):
+            for dd in d:
+                for v in dd.values():
+                    if torch.is_tensor(v): s += float(v.sum().item())
+        else:
+            for v in d.values():
+                if torch.is_tensor(v): s += float(v.sum().item())
+        return s
+
+    def _to_cpu_nested(self, d):
+        seq = d if isinstance(d, list) else [d]
+        out = []
+        for dd in seq:
+            out.append({k: (v.detach().cpu() if torch.is_tensor(v) else v) for k, v in dd.items()})
+        return out if isinstance(d, list) else out[0]
+
+    def _save_once(self):
+        model = self.trainer.model.module if hasattr(self.trainer.model, "module") else self.trainer.model
+        head = model.sem_seg_head
+        # 모든 랭크 합치기
+        if dist.is_available() and dist.is_initialized():
+            def _all_reduce_nested(d):
+                if d is None: return
+                seq = d if isinstance(d, list) else [d]
+                for dd in seq:
+                    for v in dd.values():
+                        if torch.is_tensor(v): dist.all_reduce(v, op=dist.ReduceOp.SUM)
+            _all_reduce_nested(head.positive_distributions)
+            _all_reduce_nested(head.negative_distributions)
+
+        pos = self._to_cpu_nested(head.positive_distributions)
+        neg = self._to_cpu_nested(head.negative_distributions)
+        total = self._sum_hist(pos) + self._sum_hist(neg)
+
+        abs_out = os.path.abspath(str(self.dist_path))
+        os.makedirs(os.path.dirname(abs_out), exist_ok=True)
+        if total > 0.0:
+            torch.save({'positive_distributions': pos, 'negative_distributions': neg}, abs_out)
+            print(f"[HOOK SAVE] distributions -> {abs_out} (iter={self.trainer.iter}, total={total:.1f})")
+        else:
+            print(f"[HOOK SKIP] total=0 (iter={self.trainer.iter})")
+
+    def after_step(self):
+        if comm.is_main_process() and self.trainer.iter % self.period == 0:
+            self._save_once()
+
+    def after_train(self):
+        if comm.is_main_process():
+            self._save_once()
 
 class AttributeSelectionHook:
     """
@@ -86,9 +146,9 @@ class AttributeSelectionHook:
                 if hasattr(model.sem_seg_head, 'select_att'):
                     model.sem_seg_head.select_att()
                     print(f"[Iter {trainer.iter}] Performed attribute selection")
-                if hasattr(model.sem_seg_head, 'disable_log'):
-                    model.sem_seg_head.disable_log()
-                    print(f"[Iter {trainer.iter}] Disabled attribute logging")
+                # if hasattr(model.sem_seg_head, 'disable_log'):
+                #     model.sem_seg_head.disable_log()
+                #     print(f"[Iter {trainer.iter}] Disabled attribute logging")
 
                 # pipline에서 완료된 작업 제거
                 self.pipline.pop(0)
@@ -185,10 +245,10 @@ class OWSemSegEvaluator(DatasetEvaluator):
             gt[gt == self._ignore_label] = self._num_classes
 
             print("[DEBUG] Confusion matrix shape:", self._conf_matrix.shape)
-            print("[DEBUG] GT unique values:", sorted(np.unique(gt)))
-            print("[DEBUG] Pred unique values:", sorted(np.unique(pred)))
-            print("[DEBUG] GT range:", int(gt.min()), "to", int(gt.max()))
-            print("[DEBUG] Pred range:", int(pred.min()), "to", int(pred.max()))
+            print("[DEBUG] GT unique values:", sorted(np.unique(gt_valid)))
+            print("[DEBUG] Pred unique values:", sorted(np.unique(pred_valid)))
+            print("[DEBUG] GT range:", int(gt_valid.min()), "to", int(gt_valid.max()))
+            print("[DEBUG] Pred range:", int(gt_valid.min()), "to", int(pred_valid.max()))
 
             print(f"pred.shape : {pred.shape}, gt.shape : {gt.shape}")
             print(f"pred.shape : {pred.reshape(-1)}, gt.shape : {gt.reshape(-1)}")
@@ -685,6 +745,12 @@ def setup(args):
 def main(args):
     cfg = setup(args)
     torch.set_float32_matmul_precision("high")
+
+    import os
+    abs_path = os.path.abspath(str(cfg.MODEL.SEM_SEG_HEAD.DISTRIBUTIONS))
+    print(f"[SAVE-CHECK] target abs path = {abs_path}")
+    print(f"[SAVE-CHECK] is_main_process = {comm.is_main_process()}, rank = {comm.get_rank()}")
+
     if args.eval_only:
         model = Trainer.build_model(cfg)
         DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
@@ -698,22 +764,78 @@ def main(args):
         return res
 
     trainer = Trainer(cfg)
+    trainer.register_hooks([SaveDistributionsHook(cfg.MODEL.SEM_SEG_HEAD.DISTRIBUTIONS, period=50)])
     trainer.resume_or_load(resume=args.resume)
 
     res = trainer.train()  # 훈련 실행
 
-    if cfg.MODEL.SEM_SEG_HEAD.DISTRIBUTIONS is not None:
-        if comm.is_main_process():  # 분산 학습 시 메인 프로세스에서만 저장하도록 함
-            print("Saving distributions to file...")
-            distributions = {
-                'positive_distributions': trainer.model.sem_seg_head.positive_distributions,
-                'negative_distributions': trainer.model.sem_seg_head.negative_distributions
-            }
-            torch.save(distributions, cfg.MODEL.SEM_SEG_HEAD.DISTRIBUTIONS)
-            print(f"Distributions saved to {cfg.MODEL.SEM_SEG_HEAD.DISTRIBUTIONS}")
+    dist_path = cfg.MODEL.SEM_SEG_HEAD.DISTRIBUTIONS
+    if dist_path and comm.is_main_process():
+        import os
+        import torch.distributed as dist
+
+        # DDP 언랩
+        model = trainer.model.module if hasattr(trainer.model, "module") else trainer.model
+        head = model.sem_seg_head
+
+        # 합계 계산 유틸 (list-of-dicts 또는 dict 모두 지원)
+        def _sum_hist(d):
+            if d is None: return -1.0
+            total = 0.0
+            if isinstance(d, list):
+                for dd in d:
+                    for v in dd.values():
+                        if torch.is_tensor(v):
+                            total += float(v.sum().item())
+            elif isinstance(d, dict):
+                for v in d.values():
+                    if torch.is_tensor(v):
+                        total += float(v.sum().item())
+            return total
+
+        print(f"[DEBUG] before-reduce "
+              f"pos_sum={_sum_hist(head.positive_distributions):.1f} "
+              f"neg_sum={_sum_hist(head.negative_distributions):.1f}")
+
+        # 멀티 GPU면 모든 랭크 합치기
+        if dist.is_available() and dist.is_initialized():
+            def _all_reduce_nested(d):
+                if d is None: return
+                seq = d if isinstance(d, list) else [d]
+                for dd in seq:
+                    for v in dd.values():
+                        if torch.is_tensor(v):
+                            dist.all_reduce(v, op=dist.ReduceOp.SUM)
+
+            _all_reduce_nested(head.positive_distributions)
+            _all_reduce_nested(head.negative_distributions)
+
+        print(f"[DEBUG] after-reduce "
+              f"pos_sum={_sum_hist(head.positive_distributions):.1f} "
+              f"neg_sum={_sum_hist(head.negative_distributions):.1f}")
+
+        # CPU로 옮겨 저장
+        def _to_cpu_nested(d):
+            seq = d if isinstance(d, list) else [d]
+            out = []
+            for dd in seq:
+                out.append({k: (v.detach().cpu() if torch.is_tensor(v) else v) for k, v in dd.items()})
+            return out if isinstance(d, list) else out[0]
+
+        pos = _to_cpu_nested(head.positive_distributions)
+        neg = _to_cpu_nested(head.negative_distributions)
+        total = _sum_hist(pos) + _sum_hist(neg)
+
+        abs_path = os.path.abspath(dist_path)
+        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+
+        if total > 0.0:
+            torch.save({'positive_distributions': pos, 'negative_distributions': neg}, abs_path)
+            print(f"[SAVE] distributions -> {abs_path} (total={total:.1f})")
+        else:
+            print(f"[SKIP] distributions total=0 (no stats). Would be: {abs_path}")
 
     return res
-    return trainer.train()
 
 
 if __name__ == "__main__":

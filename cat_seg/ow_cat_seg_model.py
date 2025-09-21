@@ -213,7 +213,8 @@ class OWCATSeg(nn.Module):
                         False)
                     att_outputs = F.interpolate(att_outputs, size=(targets.shape[-2], targets.shape[-1]), mode="bilinear", align_corners=False)
 
-                    if self.sem_seg_head.distributions is not None:
+                    # (previous code until 25.09.21) if self.sem_seg_head.distributions is not None:
+                    if self.training:
                         self.sem_seg_head.log_distribution(att_outputs, targets, targets != self.ignore_label)
 
                 num_classes = outputs.shape[1]

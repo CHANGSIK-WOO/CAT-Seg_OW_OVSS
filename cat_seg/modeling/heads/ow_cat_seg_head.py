@@ -77,6 +77,9 @@ class OWCATSegHead(nn.Module):
         self.fusion_att = fusion_att
         self.enable_ow_mode = enable_ow_mode  # NEW
 
+        self.positive_distributions = None
+        self.negative_distributions = None
+
         self.load_att_embeddings(att_embeddings)
 
     @classmethod

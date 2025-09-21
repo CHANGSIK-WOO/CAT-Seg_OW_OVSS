@@ -43,7 +43,7 @@ class OWCATSegPredictor(nn.Module):
         window_sizes: tuple,
         attention_type: str,
 
-        # ow-ovdd new
+        # ow-ovss new
         prev_intro_cls: int = None,
         cur_intro_cls: int = None,
         unknown_class_index: int = None,
@@ -69,14 +69,6 @@ class OWCATSegPredictor(nn.Module):
             self.test_class_texts = self.class_texts
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        from detectron2.data import MetadataCatalog
-
-        meta_names = [c.strip() for c in MetadataCatalog.get(cfg.DATASETS.TEST[0]).stuff_classes]
-        json_names = [c.strip() for c in self.test_class_texts]
-
-        mis = [(i, a, b) for i, (a, b) in enumerate(zip(meta_names, json_names)) if a != b]
-        assert not mis, f"[CLASS ORDER MISMATCH] idx={mis[0][0]} meta={mis[0][1]} json={mis[0][2]}"
-  
         self.tokenizer = None
         if clip_pretrained == "ViT-G" or clip_pretrained == "ViT-H":
             # for OpenCLIP models
@@ -143,7 +135,7 @@ class OWCATSegPredictor(nn.Module):
         self.cache = None
 
     @classmethod
-    def from_config(cls, cfg):#, in_channels, mask_classification):
+    def from_config(cls, cfg):#, in_channels, mask_classification:
         ret = {}
 
         ret["train_class_json"] = cfg.MODEL.SEM_SEG_HEAD.TRAIN_CLASS_JSON

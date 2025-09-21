@@ -35,8 +35,11 @@ MODEL:
     CLIP_FINETUNE: "attention"
 
     #ow-ovss new
+#    EMBEDDING_PATH: "data/coco/cls_embeddings.npy"
+#    ATT_EMBEDDINGS: "data/coco/att_embeddings.pth"
     EMBEDDING_PATH: "data/coco/cls_embeddings.npy"
     ATT_EMBEDDINGS: "data/coco/att_embeddings.pth"
+
     PREV_INTRO_CLS: 0    # PREVIOUS TEST TASK'S CLASS NUM
     CUR_INTRO_CLS: 75    # CURRENT TEST TASK'S CLASS NUM
     UNKNOWN_ID: 150      # TEST DATASET'S UNKNOWN ID (EQUAL TO TEST DATASET'S NUM)
@@ -74,7 +77,7 @@ SOLVER:
   IMS_PER_BATCH: 1 # 4->2
   LR_SCHEDULER_NAME: WarmupCosineLR
   BASE_LR: 0.0002
-  MAX_ITER: 20000 #80000->100
+  MAX_ITER: 50 #80000->100
   BACKBONE_MULTIPLIER: 0.0
   CLIP_MULTIPLIER: 0.01
 
@@ -82,5 +85,5 @@ TEST:
   EVAL_PERIOD: 0 #5000->100
 
 
-ATTRIBUTE_LOG_START_ITER: 50    # ← 이 값이 실제로 사용됨
-ATTRIBUTE_SELECT_ITER: 80       # ← 이 값이 실제로 사용됨
+ATTRIBUTE_LOG_START_ITER: 0    # ← 이 값이 실제로 사용됨
+ATTRIBUTE_SELECT_ITER: 50       # ← 이 값이 실제로 사용됨
