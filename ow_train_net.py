@@ -86,10 +86,10 @@ class OWPipelineHook(HookBase):
                     self.selection_done = True
                     print(f"✅ [Iter {current_iter}] Attribute selection completed")
 
-                    # 선택 후 로깅 비활성화
-                    if hasattr(model.sem_seg_head, 'disable_log'):
-                        model.sem_seg_head.disable_log()
-                        print(f"🔒 [Iter {current_iter}] Disabled attribute logging")
+                    # # 선택 후 로깅 비활성화
+                    # if hasattr(model.sem_seg_head, 'disable_log'):
+                    #     model.sem_seg_head.disable_log()
+                    #     print(f"🔒 [Iter {current_iter}] Disabled attribute logging")
 
                 except Exception as e:
                     print(f"❌ [Iter {current_iter}] Attribute selection failed: {e}")

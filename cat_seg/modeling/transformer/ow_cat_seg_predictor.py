@@ -226,11 +226,16 @@ class OWCATSegPredictor(nn.Module):
         # print(f"  logits.argmax() range: {logits.argmax(dim=1).min()}-{logits.argmax(dim=1).max()}")
 
         # 🔧 OW mode 처리
+        print(f"self.training : {self.training}")
+        print(f"enable_ow_mode : {enable_ow_mode}")
+        print(f"att_embeddings : {att_embeddings}")
         if not self.training and enable_ow_mode and att_embeddings is not None: # OV + OW Mode
+            print("forward_evaluation_ow")
             result = self.forward_evaluation_ow(x, vis, ovss_logits, att_embeddings, fusion_att)
             return result
 
         elif not self.training and not enable_ow_mode: # OV Mode
+            print("forward_evaluation_baseline")
             return self.forward_evaluation_baseline(ovss_logits)
         else:
             return ovss_logits
