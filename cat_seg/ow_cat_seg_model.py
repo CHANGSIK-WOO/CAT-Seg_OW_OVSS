@@ -162,6 +162,7 @@ class OWCATSeg(nn.Module):
                     The prediction has shape KxHxW that represents the logits of
                     each class for each pixel.
         """
+        print("ow_cat_seg_model forward")
         with torch.cuda.amp.autocast(enabled=True):
             images = [x["image"].to(self.device) for x in batched_inputs]
             if not self.training and self.sliding_window:
@@ -193,6 +194,8 @@ class OWCATSeg(nn.Module):
             features = {'res5': res5, 'res4': res4, 'res3': res3,}
 
             outputs = self.sem_seg_head(clip_features, features)
+            print(f"outputs.shape : {outputs.shape}")
+            print(f"self.training : {self.training}")
             if self.training:
                 # (B, Ht, Wt) GT Concat
                 targets = torch.stack([x["sem_seg"].to(self.device) for x in batched_inputs], dim=0)
@@ -215,6 +218,7 @@ class OWCATSeg(nn.Module):
 
                     # (previous code until 25.09.21) if self.sem_seg_head.distributions is not None:
                     if self.training:
+                        print(f"ow_cat_seg_model log_distribution")
                         self.sem_seg_head.log_distribution(att_outputs, targets, targets != self.ignore_label)
 
                 num_classes = outputs.shape[1]

@@ -42,82 +42,62 @@ from detectron2.engine.hooks import HookBase
 
 class OWPipelineHook(HookBase):
     """
-    기존 OW-OVD Hook의 정확한 복제 (Detectron2 버전)
-    기존: before_train_epoch/after_train_epoch
-    현재: before_step/after_step (iteration을 epoch처럼 사용)
+    ✅ 수정된 OW Pipeline Hook - Iteration 기반으로 명확한 동작
     """
 
-    def __init__(self, epoch_length=1000):
+    def __init__(self, log_start_iter=0, select_iter=600):
         """
         Args:
-            epoch_length: iteration을 epoch로 변환하기 위한 길이
-                         예: 1000 iter = 1 epoch
+            log_start_iter: 로깅 시작 iteration
+            select_iter: attribute selection 수행 iteration
         """
-        self.epoch_length = epoch_length
-        self.current_epoch = 0
-        self.last_epoch_iter = 0
+        self.log_start_iter = log_start_iter
+        self.select_iter = select_iter
+        self.logging_enabled = False
+        self.selection_done = False
+
+        print(f"✅ OWPipelineHook initialized: log_start={log_start_iter}, select={select_iter}")
 
     def before_step(self):
-        """기존 before_train_epoch 로직"""
-        # Epoch 계산
+        """각 iteration 시작 전 체크"""
         current_iter = self.trainer.iter
-        new_epoch = current_iter // self.epoch_length
 
-        # 새로운 epoch 시작 시에만 실행
-        if new_epoch > self.current_epoch:
-            self.current_epoch = new_epoch
-            self._before_epoch_logic()
-
-    def _before_epoch_logic(self):
-        """기존 before_train_epoch의 정확한 로직"""
-        model = self._get_model()
-
-        if len(model.pipline) == 0:
-            return
-
-        if 'att_select' == model.pipline[0]['type']:
-            model.pipline[0]['log_start_epoch'] -= 1
-
-            if model.pipline[0]['log_start_epoch'] > 0:
-                model.sem_seg_head.disable_log()
-            elif model.pipline[0]['log_start_epoch'] == 0:
+        # 로깅 시작
+        if current_iter == self.log_start_iter and not self.logging_enabled:
+            model = self._get_model()
+            if hasattr(model, 'sem_seg_head') and hasattr(model.sem_seg_head, 'enable_log'):
                 model.sem_seg_head.enable_log()
-                print(f"[Epoch {self.current_epoch}] Enabled attribute logging")
+                self.logging_enabled = True
+                print(f"✅ [Iter {current_iter}] Enabled attribute logging")
             else:
-                model.sem_seg_head.disable_log()
+                print(f"❌ [Iter {current_iter}] Cannot enable logging - missing methods")
 
     def after_step(self):
-        """기존 after_train_epoch 로직"""
-        # Epoch 계산
+        """각 iteration 완료 후 체크"""
         current_iter = self.trainer.iter
-        new_epoch = current_iter // self.epoch_length
 
-        # Epoch 끝에서만 실행
-        if new_epoch > self.current_epoch or current_iter % self.epoch_length == self.epoch_length - 1:
-            self._after_epoch_logic()
+        # Attribute selection 수행
+        if current_iter == self.select_iter and not self.selection_done:
+            model = self._get_model()
+            if hasattr(model, 'sem_seg_head') and hasattr(model.sem_seg_head, 'select_att'):
+                try:
+                    print(f"📊 [Iter {current_iter}] Starting attribute selection...")
+                    model.sem_seg_head.select_att()
+                    self.selection_done = True
+                    print(f"✅ [Iter {current_iter}] Attribute selection completed")
 
-    def _after_epoch_logic(self):
-        """기존 after_train_epoch의 정확한 로직"""
-        model = self._get_model()
+                    # 선택 후 로깅 비활성화
+                    if hasattr(model.sem_seg_head, 'disable_log'):
+                        model.sem_seg_head.disable_log()
+                        print(f"🔒 [Iter {current_iter}] Disabled attribute logging")
 
-        if len(model.pipline) == 0:
-            return
-
-        if model.pipline[0]['type'] == 'att_select':
-            if model.pipline[0]['log_start_epoch'] == 0:
-                model.sem_seg_head.select_att()
-                print(f"[Epoch {self.current_epoch}] Performed attribute selection")
-
-                model.sem_seg_head.disable_log()
-                print(f"[Epoch {self.current_epoch}] Disabled attribute logging")
-
-                model.pipline.pop(0)
-                print(f"[Epoch {self.current_epoch}] Removed completed task from pipeline")
+                except Exception as e:
+                    print(f"❌ [Iter {current_iter}] Attribute selection failed: {e}")
+            else:
+                print(f"❌ [Iter {current_iter}] Cannot perform selection - missing methods")
 
     def _get_model(self):
-        """DDP 모델 처리 (기존과 동일한 로직)"""
-        # 기존: isinstance(runner.model, MMDistributedDataParallel)
-        # Detectron2: hasattr(trainer.model, 'module')
+        """DDP 모델 처리"""
         if hasattr(self.trainer.model, 'module'):
             return self.trainer.model.module
         else:
@@ -437,56 +417,40 @@ class Trainer(DefaultTrainer):
     def __init__(self, cfg):
         super().__init__(cfg)
 
-        # ✅ OWPipelineHook만 등록 (SaveDistributionsHook 제거)
-        if (hasattr(cfg.MODEL.SEM_SEG_HEAD, 'ATT_EMBEDDINGS') and
-                cfg.MODEL.SEM_SEG_HEAD.ATT_EMBEDDINGS is not None and
-                cfg.MODEL.SEM_SEG_HEAD.ATT_EMBEDDINGS != ""):
+        # ✅ 수정: 파일 존재 확인 및 안전한 Hook 등록
+        att_embeddings_path = cfg.MODEL.SEM_SEG_HEAD.ATT_EMBEDDINGS
 
-            # Model에 접근 (DDP 고려)
-            model = self.model.module if hasattr(self.model, 'module') else self.model
+        if att_embeddings_path and os.path.exists(att_embeddings_path):
+            print(f"✅ Found attribute embeddings: {att_embeddings_path}")
 
-            # pipline 설정
+            # iteration 기반 스케줄링
             log_start_iter = cfg.get('ATTRIBUTE_LOG_START_ITER', 0)
-            select_iter = cfg.get('ATTRIBUTE_SELECT_ITER', 50)
-            epoch_length = cfg.get('EPOCH_LENGTH', 10)  # 더 작은 값으로 설정
+            select_iter = cfg.get('ATTRIBUTE_SELECT_ITER', 600)
 
-            # iteration을 epoch로 변환
-            log_start_epoch = max(1, log_start_iter // epoch_length)
-
-            pipline_config = [{
-                'type': 'att_select',
-                'log_start_epoch': log_start_epoch,
-            }]
-
-            # Model에 pipline 설정
-            model.pipline = pipline_config
-            print(f"✅ Model pipline configured: {pipline_config}")
-
-            # OWPipelineHook만 등록
-            pipeline_hook = OWPipelineHook(epoch_length=epoch_length)
+            # OWPipelineHook 등록
+            pipeline_hook = OWPipelineHook(
+                log_start_iter=log_start_iter,
+                select_iter=select_iter
+            )
             self.register_hooks([pipeline_hook])
 
-            print(f"✅ OWPipelineHook enabled: epoch_length={epoch_length}")
-            print(f"🚫 SaveDistributionsHook skipped - will save at training end only")
+            print(f"✅ OWPipelineHook registered: start={log_start_iter}, select={select_iter}")
+
         else:
-            print("❌ No ATT_EMBEDDINGS specified, skipping OWPipelineHook")
+            print(f"❌ Attribute embeddings not found: {att_embeddings_path}")
+            print("⚠️  OW pipeline will be disabled. Please generate embeddings first:")
+            print("    python generate_clip_embeddings.py --classnames datasets/ade150.json --out_dir data/coco/")
 
         self.distributions_path = cfg.MODEL.SEM_SEG_HEAD.DISTRIBUTIONS
 
     def train(self):
-        """✅ 수정: 훈련 완료 즉시 distribution 저장"""
+        """✅ 수정: 훈련 완료 후 distribution 저장"""
         try:
-            # 원래 훈련 실행
             result = super().train()
-
-            # ✅ 훈련 완료 즉시 distribution 저장 (평가 전에)
             self._save_distributions_immediately()
-
             return result
-
         except Exception as e:
             print(f"❌ Training error: {e}")
-            # 에러 발생 시에도 distribution 저장 시도
             try:
                 self._save_distributions_immediately()
             except Exception as save_err:
@@ -499,9 +463,8 @@ class Trainer(DefaultTrainer):
             return
 
         try:
-            print("💾 Attempting to save distributions immediately after training...")
+            print("💾 Attempting to save distributions...")
 
-            # 모델에서 distribution 데이터 가져오기
             model = self.model.module if hasattr(self.model, 'module') else self.model
 
             if (hasattr(model, 'sem_seg_head') and
@@ -512,39 +475,31 @@ class Trainer(DefaultTrainer):
                 neg_dist = model.sem_seg_head.negative_distributions
 
                 if pos_dist is not None and neg_dist is not None:
-                    # distribution 데이터 준비
                     distributions_data = {
                         'positive_distributions': pos_dist,
                         'negative_distributions': neg_dist,
                         'thresholds': getattr(model.sem_seg_head, 'thrs', [0.75]),
                         'num_attributes': len(pos_dist[0]) if pos_dist and len(pos_dist) > 0 else 0,
-                        'saved_at': 'immediate_after_training'
+                        'saved_at': 'training_completion'
                     }
 
-                    # 디렉토리 생성
-                    import os
                     os.makedirs(os.path.dirname(self.distributions_path), exist_ok=True)
-
-                    # 저장
                     torch.save(distributions_data, self.distributions_path)
-                    print(f"✅ Distributions saved immediately to: {self.distributions_path}")
+                    print(f"✅ Distributions saved to: {self.distributions_path}")
 
                     # 검증
                     if os.path.exists(self.distributions_path):
                         saved_data = torch.load(self.distributions_path, map_location='cpu')
-                        pos_count = saved_data.get('num_attributes', 0)
-                        print(f"📊 Verified: {pos_count} attributes saved successfully")
+                        print(f"📊 Verified: {saved_data.get('num_attributes', 0)} attributes saved")
                     else:
-                        print("❌ File not found after saving")
-
+                        print("❌ File verification failed")
                 else:
                     print("⚠️ No distribution data collected during training")
-
             else:
-                print("⚠️ No distribution attributes found in model")
+                print("⚠️ Distribution attributes not found in model")
 
         except Exception as e:
-            print(f"❌ Error saving distributions immediately: {e}")
+            print(f"❌ Error saving distributions: {e}")
             import traceback
             traceback.print_exc()
 

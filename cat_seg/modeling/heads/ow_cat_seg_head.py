@@ -224,6 +224,11 @@ class OWCATSegHead(nn.Module):
 
     def select_att(self, per_class=25):
         """Select attributes based on distribution similarity and diversity."""
+        print(f"self.att_embeddings is None: {self.att_embeddings is None}")
+        print(f"self.positive_distributions is None : {self.positive_distributions}")
+        print(f"self.negative_distributions is None : {self.negative_distributions}")
+        print(f"self.distributions is None : {self.distributions}")
+
         if self.att_embeddings is None:
             print("No att_embeddings available, skipping attribute selection")
             return
@@ -317,6 +322,7 @@ class OWCATSegHead(nn.Module):
     def log_distribution(self, att_scores, gt_labels, gt_masks):
         """Log distribution of attributes for known/unknown classes."""
         if not self.training or self.positive_distributions is None or self.att_embeddings is None:
+            print("log_distribution no condition : return")
             return
 
         att_scores = att_scores.float()
@@ -335,18 +341,19 @@ class OWCATSegHead(nn.Module):
 
                 # Determine positive/negative based on known classes
                 positive = (gt_labels_valid < self.unknown_class_index) & (gt_labels_valid >= self.prev_intro_cls + self.cur_intro_cls)
+                print(f"positive : {positive}")
 
                 if positive.any():
                     positive_scores = att_scores_valid[:, positive].T  # N_pos x C
                     for att_i in range(C):
-                        self.positive_distributions[idx][att_i] += torch.histc(
-                            positive_scores[:, att_i], bins=int(1 / 0.0001), min=0, max=1)
+                        self.positive_distributions[idx][att_i] += torch.histc(positive_scores[:, att_i], bins=int(1 / 0.0001), min=0, max=1)
 
                 if (~positive).any():
                     negative_scores = att_scores_valid[:, ~positive].T  # N_neg x C
                     for att_i in range(C):
-                        self.negative_distributions[idx][att_i] += torch.histc(
-                            negative_scores[:, att_i], bins=int(1 / 0.0001), min=0, max=1)
+                        self.negative_distributions[idx][att_i] += torch.histc(negative_scores[:, att_i], bins=int(1 / 0.0001), min=0, max=1)
+
+        print("log_distribution finish")
 
 
     def forward(self, features, guidance_features, prompt=None, gt_cls=None):
@@ -355,6 +362,7 @@ class OWCATSegHead(nn.Module):
             features: (B, C, HW)
             guidance_features: (B, C, H, W)
         """
+        print("ow_cat_seg_head forward")
         img_feat = rearrange(features[:, 1:, :], "b (h w) c->b c h w", h=self.feature_resolution[0], w=self.feature_resolution[1])
         return self.predictor(img_feat,
                               guidance_features,
