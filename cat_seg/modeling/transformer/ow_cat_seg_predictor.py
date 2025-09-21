@@ -68,6 +68,14 @@ class OWCATSegPredictor(nn.Module):
         if self.test_class_texts == None:
             self.test_class_texts = self.class_texts
         device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        from detectron2.data import MetadataCatalog
+
+        meta_names = [c.strip() for c in MetadataCatalog.get(cfg.DATASETS.TEST[0]).stuff_classes]
+        json_names = [c.strip() for c in self.test_class_texts]
+
+        mis = [(i, a, b) for i, (a, b) in enumerate(zip(meta_names, json_names)) if a != b]
+        assert not mis, f"[CLASS ORDER MISMATCH] idx={mis[0][0]} meta={mis[0][1]} json={mis[0][2]}"
   
         self.tokenizer = None
         if clip_pretrained == "ViT-G" or clip_pretrained == "ViT-H":
