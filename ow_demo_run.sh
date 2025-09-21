@@ -6,7 +6,7 @@
 set -e
 
 # Default configuration
-CONFIG_FILE="configs/ow_vitb_384_size_down.yaml"
+CONFIG_FILE="configs/ow_vitb_384.yaml"
 MODEL_WEIGHTS=""
 INPUT_PATH=""
 OUTPUT_PATH=""
