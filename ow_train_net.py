@@ -40,49 +40,49 @@ import json
 from detectron2.engine.hooks import HookBase
 class OWPipelineHook(HookBase):
     """
-    ✅ 수정된 OW Pipeline Hook - Iteration 기반으로 명확한 동작
+    Iteration based OWPipelineHook
     """
 
     def __init__(self, log_start_iter=0, select_iter=600):
         """
         Args:
-            log_start_iter: 로깅 시작 iteration
-            select_iter: attribute selection 수행 iteration
+            log_start_iter: Logging start iteration
+            select_iter: attribute selection start iteration
         """
         self.log_start_iter = log_start_iter
         self.select_iter = select_iter
         self.logging_enabled = False
         self.selection_done = False
 
-        print(f"✅ OWPipelineHook initialized: log_start={log_start_iter}, select={select_iter}")
+        print(f"OWPipelineHook initialized: log_start={log_start_iter}, select={select_iter}")
 
     def before_step(self):
-        """각 iteration 시작 전 체크"""
+        """check before iteration"""
         current_iter = self.trainer.iter
 
-        # 로깅 시작
+        # logging start
         if current_iter == self.log_start_iter and not self.logging_enabled:
             model = self._get_model()
             if hasattr(model, 'sem_seg_head') and hasattr(model.sem_seg_head, 'enable_log'):
-                model.sem_seg_head.enable_log()
+                model.sem_seg_head.enable_log() # initialize positive / negative_distributions
                 self.logging_enabled = True
-                print(f"✅ [Iter {current_iter}] Enabled attribute logging")
+                print(f"[Iter {current_iter}] Enabled attribute logging")
             else:
-                print(f"❌ [Iter {current_iter}] Cannot enable logging - missing methods")
+                print(f"[Iter {current_iter}] Cannot enable logging - missing methods")
 
     def after_step(self):
-        """각 iteration 완료 후 체크"""
+        """check after iteration"""
         current_iter = self.trainer.iter
 
-        # Attribute selection 수행
+        # Start Attribute selection
         if current_iter == self.select_iter and not self.selection_done:
             model = self._get_model()
             if hasattr(model, 'sem_seg_head') and hasattr(model.sem_seg_head, 'select_att'):
                 try:
-                    print(f"📊 [Iter {current_iter}] Starting attribute selection...")
+                    print(f"[Iter {current_iter}] Starting attribute selection...")
                     model.sem_seg_head.select_att()
                     self.selection_done = True
-                    print(f"✅ [Iter {current_iter}] Attribute selection completed")
+                    print(f"[Iter {current_iter}] Attribute selection completed")
 
                     # # 선택 후 로깅 비활성화
                     # if hasattr(model.sem_seg_head, 'disable_log'):
@@ -90,15 +90,17 @@ class OWPipelineHook(HookBase):
                     #     print(f"🔒 [Iter {current_iter}] Disabled attribute logging")
 
                 except Exception as e:
-                    print(f"❌ [Iter {current_iter}] Attribute selection failed: {e}")
+                    print(f"[Iter {current_iter}] Attribute selection failed: {e}")
             else:
-                print(f"❌ [Iter {current_iter}] Cannot perform selection - missing methods")
+                print(f"[Iter {current_iter}] Cannot perform selection - missing methods")
 
     def _get_model(self):
         """DDP 모델 처리"""
         if hasattr(self.trainer.model, 'module'):
+            print(f"self.trainer.model.module : {self.trainer.model.module}")
             return self.trainer.model.module
         else:
+            print(f"self.trainer.model : {self.trainer.model}")
             return self.trainer.model
 
 class OWSemSegEvaluator(DatasetEvaluator):
@@ -106,7 +108,6 @@ class OWSemSegEvaluator(DatasetEvaluator):
     Open-World Semantic Segmentation Evaluator.
     Evaluates both known (seen) and unknown (unseen) classes separately.
     """
-
     @configurable
     def __init__(
             self, dataset_name, distributed, output_dir=None, *,
@@ -143,25 +144,24 @@ class OWSemSegEvaluator(DatasetEvaluator):
         # Mode-specific settings
         if evaluation_mode == "OVSS":
             # OVSS: 150 classes (0~149), Known: 0~74, Unknown: 75~149
-            self._num_pred_classes = 150
+            self._num_pred_classes = meta.stuff_classes
             self._known_range = list(range(0, self._num_known_classes))  # 0~74
             self._unknown_range = list(range(self._num_known_classes, 150))  # 75~149
             self._logger.info(f"🔧 OVSS Mode:")
             self._logger.info(f"  Known classes: 0~{self._num_known_classes - 1} ({self._num_known_classes})")
-            self._logger.info(f"  Unknown classes: {self._num_known_classes}~149 ({150 - self._num_known_classes})")
+            self._logger.info(f"  Unknown classes: {self._num_known_classes}~{self._num_gt_classes-1} ({150 - self._num_known_classes})")
 
         elif evaluation_mode == "OWSS":
             # OWSS: 76 classes (0~75), Known: 0~74, Unknown: 75
             # GT classes 75~149 will be remapped to pred class 75
-            self._num_pred_classes = 76  # 75 known + 1 unknown
+            self._num_pred_classes = self._num_known_classes + 1  # 75 known + 1 unknown
             self._known_range = list(range(0, self._num_known_classes))  # 0~74
-            self._unknown_pred_index = 75  # Unknown prediction index
+            self._unknown_pred_index = self._num_known_classes  # Unknown prediction index
             self._unknown_gt_range = list(range(self._num_known_classes, 150))  # GT 75~149
             self._logger.info(f"🔧 OWSS Mode:")
             self._logger.info(f"  Known classes: 0~{self._num_known_classes - 1} ({self._num_known_classes})")
             self._logger.info(
                 f"  Unknown GT classes: {self._num_known_classes}~149 → pred class {self._unknown_pred_index}")
-
         else:
             raise ValueError(f"Unknown evaluation mode: {evaluation_mode}")
 
@@ -223,7 +223,7 @@ class OWSemSegEvaluator(DatasetEvaluator):
             # Update confusion matrix
             assert pred_processed.shape == gt_processed.shape
             self._conf_matrix += np.bincount(
-                self._conf_matrix.shape[0] * pred_processed.reshape(-1) + gt_processed.reshape(-1),
+                self._conf_matrix.shape[1] * pred_processed.reshape(-1) + gt_processed.reshape(-1),
                 minlength=self._conf_matrix.size,
             ).reshape(self._conf_matrix.shape)
 
@@ -642,22 +642,26 @@ class OWSemSegEvaluator(DatasetEvaluator):
 
 class VOCbEvaluator(SemSegEvaluator):
     """
-    Evaluate semantic segmentation metrics for VOC background dataset.
+    Evaluate semantic segmentation metrics.
     """
-
     def process(self, inputs, outputs):
         """
         Args:
             inputs: the inputs to a model.
-            outputs: the outputs of a model.
+                It is a list of dicts. Each dict corresponds to an image and
+                contains keys like "height", "width", "file_name".
+            outputs: the outputs of a model. It is either list of semantic segmentation predictions
+                (Tensor [H, W]) or list of dicts with key "sem_seg" that contains semantic
+                segmentation prediction in the same format.
         """
         for input, output in zip(inputs, outputs):
             output = output["sem_seg"].argmax(dim=0).to(self._cpu_device)
             pred = np.array(output, dtype=np.int)
-            pred[pred >= 20] = 20  # Clip predictions to 20 classes
+            pred[pred >= 20] = 20
             with PathManager.open(self.input_file_to_gt_file[input["file_name"]], "rb") as f:
                 gt = np.array(Image.open(f), dtype=np.int)
 
+            gt[gt == self._ignore_label] = self._num_classes
 
             self._conf_matrix += np.bincount(
                 (self._num_classes + 1) * pred.reshape(-1) + gt.reshape(-1),
@@ -674,7 +678,6 @@ from cat_seg import (
     SemanticSegmentorWithTTA,
     add_cat_seg_config,
 )
-
 
 class Trainer(DefaultTrainer):
     def __init__(self, cfg):
@@ -990,12 +993,6 @@ def setup(args):
 def main(args):
     cfg = setup(args)
     torch.set_float32_matmul_precision("high")
-
-    import os
-    abs_path = os.path.abspath(str(cfg.MODEL.SEM_SEG_HEAD.DISTRIBUTIONS))
-    print(f"[SAVE-CHECK] target abs path = {abs_path}")
-    print(f"[SAVE-CHECK] is_main_process = {comm.is_main_process()}, rank = {comm.get_rank()}")
-
     if args.eval_only:
         model = Trainer.build_model(cfg)
         DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
@@ -1010,10 +1007,9 @@ def main(args):
 
     trainer = Trainer(cfg)
     trainer.resume_or_load(resume=args.resume)
+    res = trainer.train()
+    return res
 
-    res = trainer.train()  # 훈련 실행
-    #
-    # # ✅ 수정: 훈련 실행 (distribution은 train() 메서드에서 자동 저장됨)
     # try:
     #     res = trainer.train()
     #     print("✅ Training completed successfully")
@@ -1038,7 +1034,7 @@ def main(args):
     #     else:
     #         print(f"❌ Final verification failed: Distributions file not found at {abs_path}")
 
-    return res
+
 
 
 if __name__ == "__main__":

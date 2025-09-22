@@ -121,6 +121,13 @@ class OWCATSegHead(nn.Module):
         self.reset_log()
         print('enable log')
 
+    def reset_log(self, interval=0.0001):
+        """Reset the log."""
+        # [0, 1] interval = 0.0001
+        if self.att_embeddings is None: return
+        self.positive_distributions = [{att_i: torch.zeros(int((1) / interval)).to(self.device) for att_i in range(self.att_embeddings.shape[0])} for _ in self.thrs]
+        self.negative_distributions = [{att_i: torch.zeros(int((1) / interval)).to(self.device) for att_i in range(self.att_embeddings.shape[0])} for _ in self.thrs]
+
     def load_att_embeddings(self, att_embeddings):
         if att_embeddings is None:
             self.att_embeddings = None
@@ -135,20 +142,11 @@ class OWCATSegHead(nn.Module):
         else:
             prev_atts_num = 0
         self.att_embeddings = torch.nn.Parameter(atts['att_embedding'].to(dtype=self.clip_dtype)[prev_atts_num:])
-        self.enable_log()
         # self.att_embeddings = torch.nn.Parameter(torch.zeros(1000, 512).float())
-
-    def reset_log(self, interval=0.0001):
-        """Reset the log."""
-        # [0, 1] interval = 0.0001
-        if self.att_embeddings is None: return
-        self.positive_distributions = [{att_i: torch.zeros(int((1) / interval)).to(self.device) for att_i in range(self.att_embeddings.shape[0])} for _ in self.thrs]
-        self.negative_distributions = [{att_i: torch.zeros(int((1) / interval)).to(self.device) for att_i in range(self.att_embeddings.shape[0])} for _ in self.thrs]
 
     def calculate_uncertainty(self, known_logits):
         known_logits = torch.clamp(known_logits, 1e-6, 1 - 1e-6)
-        entropy = (-known_logits * torch.log(known_logits) - (1 - known_logits) * torch.log(1 - known_logits)).mean(
-            dim=-1, keepdim=True)
+        entropy = (-known_logits * torch.log(known_logits) - (1 - known_logits) * torch.log(1 - known_logits)).mean(dim=-1, keepdim=True)
         return entropy
 
     def select_top_k_attributes(self, adjusted_scores: Tensor, k: int = 3) -> Tensor:
@@ -233,20 +231,18 @@ class OWCATSegHead(nn.Module):
             print("No att_embeddings available, skipping attribute selection")
             return
 
-        if (self.positive_distributions is None or
-                self.negative_distributions is None):
+        if (self.positive_distributions is None or self.negative_distributions is None):
             print("No distributions collected in current training, skipping attribute selection")
             return
 
         import os
-
         if self.distributions is not None and os.path.exists(self.distributions):
             print(f"Loading existing distributions from {self.distributions}")
             try:
                 # 기존 파일에서 데이터 로드
-                saved_distributions = torch.load(self.distributions, map_location='cuda')
-                saved_positive = saved_distributions['positive_distributions']
-                saved_negative = saved_distributions['negative_distributions']
+                distributions = torch.load(self.distributions, map_location='cuda')
+                saved_positive = distributions['positive_distributions']
+                saved_negative = distributions['negative_distributions']
 
                 # 기존 데이터와 현재 수집된 데이터를 결합/업데이트
                 thr_id = self.thrs.index(self.thr)

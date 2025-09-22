@@ -55,10 +55,10 @@ class OWCATSegPredictor(nn.Module):
     ):
         """
         Args:
-            
+
         """
         super().__init__()
-        
+
         import json
         # use class_texts in train_forward, and test_class_texts in test_forward
         with open(train_class_json, 'r') as f_in:
@@ -75,17 +75,17 @@ class OWCATSegPredictor(nn.Module):
             # for OpenCLIP models
             name, pretrain = ('ViT-H-14', 'laion2b_s32b_b79k') if clip_pretrained == 'ViT-H' else ('ViT-bigG-14', 'laion2b_s39b_b160k')
             clip_model, _, clip_preprocess = open_clip.create_model_and_transforms(
-                name, 
-                pretrained=pretrain, 
-                device=device, 
+                name,
+                pretrained=pretrain,
+                device=device,
                 force_image_size=336,)
-        
+
             self.tokenizer = open_clip.get_tokenizer(name)
         else:
             # for OpenAI models
             clip_model, clip_preprocess = clip.load(clip_pretrained, device=device, jit=False, prompt_depth=prompt_depth, prompt_length=prompt_length)
-    
-        self.prompt_ensemble_type = prompt_ensemble_type        
+
+        self.prompt_ensemble_type = prompt_ensemble_type
 
         if self.prompt_ensemble_type == "imagenet_select":
             prompt_templates = imagenet_templates.IMAGENET_TEMPLATES_SELECT
@@ -95,12 +95,12 @@ class OWCATSegPredictor(nn.Module):
             prompt_templates = ['A photo of a {} in the scene',]
         else:
             raise NotImplementedError
-        
+
         self.prompt_templates = prompt_templates
 
         self.text_features = self.class_embeddings(self.class_texts, prompt_templates, clip_model).permute(1, 0, 2).float()
         self.text_features_test = self.class_embeddings(self.test_class_texts, prompt_templates, clip_model).permute(1, 0, 2).float()
-        
+
         self.clip_model = clip_model.float()
         self.clip_preprocess = clip_preprocess
 
@@ -131,7 +131,7 @@ class OWCATSegPredictor(nn.Module):
             decoder_guidance_dims=decoder_guidance_dims,
             decoder_guidance_proj_dims=decoder_guidance_proj_dims,
             num_layers=num_layers,
-            nheads=num_heads, 
+            nheads=num_heads,
             hidden_dim=hidden_dims,
             pooling_size=pooling_sizes,
             feature_resolution=feature_resolution,
@@ -140,7 +140,7 @@ class OWCATSegPredictor(nn.Module):
             prompt_channel=len(prompt_templates),
             )
         self.transformer = transformer
-        
+
         self.tokens = None
         self.cache = None
         # Separate caches for train/test
@@ -304,15 +304,6 @@ class OWCATSegPredictor(nn.Module):
             final_output = torch.cat([known_logits, unknown_logit], dim=1)
             print(f"  OWSS output shape: {final_output.shape}")
             return final_output
-        else:
-            print("  Baseline: adding low-score unknown class")
-            # Add unknown class with low scores
-            B, C, H, W = known_logits.shape
-            unknown_padding = torch.full((B, 1, H, W), -100.0,
-                                         device=known_logits.device, dtype=known_logits.dtype)
-            baseline_output = torch.cat([known_logits, unknown_padding], dim=1)
-            print(f"  OWSS baseline shape: {baseline_output.shape}")
-            return baseline_output
 
     def predict_unknown_owss(self, known_logits, att_logits):
         """

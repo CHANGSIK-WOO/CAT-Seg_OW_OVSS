@@ -47,8 +47,8 @@ MODEL:
     CLIP_FINETUNE: "attention"
 
     #ow-ovss new
-#    EMBEDDING_PATH: "data/coco/cls_embeddings.npy"
-#    ATT_EMBEDDINGS: "data/coco/att_embeddings.pth"
+  #    EMBEDDING_PATH: "data/coco/cls_embeddings.npy"
+  #    ATT_EMBEDDINGS: "data/coco/att_embeddings.pth"
     EMBEDDING_PATH: "data/coco/cls_embeddings.npy"
     ATT_EMBEDDINGS: "data/coco/att_embeddings.pth"
 
@@ -67,6 +67,7 @@ MODEL:
     ENABLE_OW_MODE: True        # Set to False for baseline comparison
 
   PROMPT_ENSEMBLE_TYPE: "single"
+
 
 # 학습과 평가 데이터셋 분리
 DATASETS:
