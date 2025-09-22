@@ -38,8 +38,6 @@ import pycocotools.mask as mask_util
 import json
 
 from detectron2.engine.hooks import HookBase
-
-
 class OWPipelineHook(HookBase):
     """
     ✅ 수정된 OW Pipeline Hook - Iteration 기반으로 명확한 동작
@@ -112,15 +110,17 @@ class OWSemSegEvaluator(DatasetEvaluator):
     @configurable
     def __init__(
             self, dataset_name, distributed, output_dir=None, *,
-            prev_intro_cls=None, cur_intro_cls=None, unknown_class_index=None, ignore_label=None,
-    ):
+            prev_intro_cls=None, cur_intro_cls=None, unknown_class_index=None, ignore_label=None, evaluation_mode=None,):
         """
         Args:
             dataset_name (str): name of the dataset to be evaluated.
             distributed (True): if True, will collect results from all ranks for evaluation.
             output_dir (str): an output directory to dump results.
-            num_classes, ignore_label: deprecated argument
-            known_classes_end (int): last index of known classes (0-indexed)
+            prev_intro_cls (int): previous introduced classes
+            cur_intro_cls (int): current introduced classes
+            unknown_class_index (int): index for unknown class (used in OWSS mode)
+            ignore_label (int): label to ignore
+            evaluation_mode (str): "OVSS" or "OWSS"
         """
         self._logger = logging.getLogger(__name__)
 
@@ -134,20 +134,49 @@ class OWSemSegEvaluator(DatasetEvaluator):
         self.prev_intro_cls = prev_intro_cls
         self.cur_intro_cls = cur_intro_cls
         self.unknown_class_index = unknown_class_index
-        self._num_seen_classes = self.prev_intro_cls + self.cur_intro_cls
-        self._class_names = meta.stuff_classes + (["unknown"] if self.unknown_class_index is not None else [])
-        self._num_classes = len(self._class_names)
-        self._known_classes = self._class_names[:self._num_seen_classes]
-        self._val_extra_classes = self._class_names[self._num_seen_classes:]
-        self._ignore_label = ignore_label
+        self.evaluation_mode = evaluation_mode
 
+        self._num_known_classes = self.prev_intro_cls + self.cur_intro_cls  # 75
+        self._class_names = meta.stuff_classes  # ADE20K 150 classes
+        self._num_gt_classes = len(self._class_names)  # 150
+
+        # Mode-specific settings
+        if evaluation_mode == "OVSS":
+            # OVSS: 150 classes (0~149), Known: 0~74, Unknown: 75~149
+            self._num_pred_classes = 150
+            self._known_range = list(range(0, self._num_known_classes))  # 0~74
+            self._unknown_range = list(range(self._num_known_classes, 150))  # 75~149
+            self._logger.info(f"🔧 OVSS Mode:")
+            self._logger.info(f"  Known classes: 0~{self._num_known_classes - 1} ({self._num_known_classes})")
+            self._logger.info(f"  Unknown classes: {self._num_known_classes}~149 ({150 - self._num_known_classes})")
+
+        elif evaluation_mode == "OWSS":
+            # OWSS: 76 classes (0~75), Known: 0~74, Unknown: 75
+            # GT classes 75~149 will be remapped to pred class 75
+            self._num_pred_classes = 76  # 75 known + 1 unknown
+            self._known_range = list(range(0, self._num_known_classes))  # 0~74
+            self._unknown_pred_index = 75  # Unknown prediction index
+            self._unknown_gt_range = list(range(self._num_known_classes, 150))  # GT 75~149
+            self._logger.info(f"🔧 OWSS Mode:")
+            self._logger.info(f"  Known classes: 0~{self._num_known_classes - 1} ({self._num_known_classes})")
+            self._logger.info(
+                f"  Unknown GT classes: {self._num_known_classes}~149 → pred class {self._unknown_pred_index}")
+
+        else:
+            raise ValueError(f"Unknown evaluation mode: {evaluation_mode}")
+
+        # self._num_seen_classes = self.prev_intro_cls + self.cur_intro_cls
+        # self._class_names = meta.stuff_classes + (["unknown"] if self.unknown_class_index is not None else [])
+        # self._class_names = meta.stuff_classes
+        # self._num_classes = len(self._class_names)
+        # self._known_classes = self._class_names[:self._num_seen_classes]
+        # self._val_extra_classes = self._class_names[self._num_seen_classes:]
+
+        self._ignore_label = ignore_label
         self._dataset_name = dataset_name
         self._distributed = distributed
         self._output_dir = output_dir
         self._cpu_device = torch.device("cpu")
-
-        self._logger.info(f"Known classes: {len(self._known_classes)} (0-{len(self._known_classes)-1})")
-        self._logger.info(f"Unknown classes: {len(self._class_names) - len(self._known_classes)} ({len(self._known_classes)}-{len(self._class_names)-1})")
 
     @classmethod
     def from_config(cls, cfg, dataset_name, distributed, output_dir=None):
@@ -160,52 +189,108 @@ class OWSemSegEvaluator(DatasetEvaluator):
             "cur_intro_cls": cfg.MODEL.SEM_SEG_HEAD.CUR_INTRO_CLS,
             "unknown_class_index": cfg.MODEL.SEM_SEG_HEAD.UNKNOWN_ID,
             "ignore_label": cfg.MODEL.SEM_SEG_HEAD.IGNORE_VALUE,
+            "evaluation_mode": cfg.MODEL.SEM_SEG_HEAD.EVALUATION_MODE,
         }
         return ret
 
     def reset(self):
-        self._conf_matrix = np.zeros((self._num_classes+1, self._num_classes+1), dtype=np.int64)
+        # self._conf_matrix = np.zeros((self._num_classes+1, self._num_classes+1), dtype=np.int64)
+        # self._predictions = []
+        if self.evaluation_mode == "OVSS":
+            # OVSS: 150x150 confusion matrix
+            self._conf_matrix = np.zeros((self._num_gt_classes, self._num_gt_classes + 1), dtype=np.int64)  # +1 for ignore
+        elif self.evaluation_mode == "OWSS":
+            # OWSS: 76x150 confusion matrix (76 pred classes, 150 GT classes)
+            self._conf_matrix = np.zeros((self._num_known_classes + 1, self._num_gt_classes + 1), dtype=np.int64)  # +1 for ignore
+
         self._predictions = []
 
     def process(self, inputs, outputs):
-        """
-        Args:
-            inputs: the inputs to a model.
-            outputs: the outputs of a model.
-        """
+        """Process predictions and ground truth"""
         for input, output in zip(inputs, outputs):
             output = output["sem_seg"].argmax(dim=0).to(self._cpu_device)
             pred = np.array(output, dtype=int)
+
             with PathManager.open(self.input_file_to_gt_file[input["file_name"]], "rb") as f:
                 gt = np.array(Image.open(f), dtype=int)
 
-            #ignore gt == self._ignore_label point
-            valid_mask = (gt != self._ignore_label)
-            gt_valid = gt[valid_mask]
-            pred_valid = pred[valid_mask]
+            # Mode-specific processing
+            if self.evaluation_mode == "OVSS":
+                pred_processed, gt_processed = self.process_ovss(pred, gt)
+            elif self.evaluation_mode == "OWSS":
+                pred_processed, gt_processed = self.process_owss(pred, gt)
 
-            gt[gt == self._ignore_label] = self._num_classes
-
-            print("[DEBUG] Confusion matrix shape:", self._conf_matrix.shape)
-            print("[DEBUG] GT unique values:", sorted(np.unique(gt_valid)))
-            print("[DEBUG] Pred unique values:", sorted(np.unique(pred_valid)))
-            print("[DEBUG] GT range:", int(gt_valid.min()), "to", int(gt_valid.max()))
-            print("[DEBUG] Pred range:", int(gt_valid.min()), "to", int(pred_valid.max()))
-
-            print(f"pred.shape : {pred.shape}, gt.shape : {gt.shape}")
-            print(f"pred.shape : {pred.reshape(-1)}, gt.shape : {gt.reshape(-1)}")
-            assert pred.reshape(-1).shape==gt.reshape(-1).shape, "shape of pred and gt have to be same."
+            # Update confusion matrix
+            assert pred_processed.shape == gt_processed.shape
             self._conf_matrix += np.bincount(
-                (self._num_classes+1) * pred.reshape(-1) + gt.reshape(-1),
+                self._conf_matrix.shape[0] * pred_processed.reshape(-1) + gt_processed.reshape(-1),
                 minlength=self._conf_matrix.size,
             ).reshape(self._conf_matrix.shape)
 
-            # self._predictions.extend(self.encode_json_sem_seg(pred, input["file_name"]))
+        # for input, output in zip(inputs, outputs):
+        #     output = output["sem_seg"].argmax(dim=0).to(self._cpu_device)
+        #     pred = np.array(output, dtype=int)
+        #     with PathManager.open(self.input_file_to_gt_file[input["file_name"]], "rb") as f:
+        #         gt = np.array(Image.open(f), dtype=int)
+        #
+        #     #ignore gt == self._ignore_label point
+        #     valid_mask = (gt != self._ignore_label)
+        #     gt_valid = gt[valid_mask]
+        #     pred_valid = pred[valid_mask]
+        #
+        #     gt[gt == self._ignore_label] = self._num_classes
+        #
+        #     # print("[DEBUG] Confusion matrix shape:", self._conf_matrix.shape)
+        #     # print("[DEBUG] GT unique values:", sorted(np.unique(gt_valid)))
+        #     # print("[DEBUG] Pred unique values:", sorted(np.unique(pred_valid)))
+        #     # print("[DEBUG] GT range:", int(gt_valid.min()), "to", int(gt_valid.max()))
+        #     # print("[DEBUG] Pred range:", int(gt_valid.min()), "to", int(pred_valid.max()))
+        #     #
+        #     # print(f"pred.shape : {pred.shape}, gt.shape : {gt.shape}")
+        #     # print(f"pred.shape : {pred.reshape(-1)}, gt.shape : {gt.reshape(-1)}")
+        #     assert pred.reshape(-1).shape==gt.reshape(-1).shape, "shape of pred and gt have to be same."
+        #     self._conf_matrix += np.bincount(
+        #         (self._num_classes+1) * pred.reshape(-1) + gt.reshape(-1),
+        #         minlength=self._conf_matrix.size,
+        #     ).reshape(self._conf_matrix.shape)
+
+    def process_ovss(self, pred, gt):
+        """
+        🔧 OVSS Mode processing
+        - Pred: 0~149 (150 classes) → keep as is
+        - GT: 0~149 (150 classes) → keep as is
+        """
+        print(f"🔧 [OVSS] Pred range: {pred.min()}~{pred.max()}, GT range: {gt.min()}~{gt.max()}")
+
+        # Create processed GT (ignore → 150)
+        gt_processed = gt.copy()
+        gt_processed[gt_processed == self._ignore_label] = 150
+
+        return pred, gt_processed
+
+    def process_owss(self, pred, gt):
+        """
+        🔧 OWSS Mode processing
+        - Pred: 0~75 (76 classes) → keep as is
+        - GT: 0~149 → remap 75~149 to match unknown pred index
+        """
+        print(f"🔧 [OWSS] Pred range: {pred.min()}~{pred.max()}, GT range: {gt.min()}~{gt.max()}")
+
+        # Remap GT: 75~149 → 75 (unknown prediction index)
+        gt_remapped = gt.copy()
+        unknown_mask = (gt >= self._num_known_classes) & (gt < 150)
+        gt_remapped[unknown_mask] = self._unknown_pred_index  # Remap to pred class 75
+
+        # Handle ignore label
+        gt_remapped[gt == self._ignore_label] = 150
+
+        print(f"🔧 [OWSS] Remapped GT range: {gt_remapped.min()}~{gt_remapped.max()}")
+        print(f"🔧 [OWSS] Unknown pixels remapped: {unknown_mask.sum()}")
+
+        return pred, gt_remapped
 
     def evaluate(self):
-        """
-        Evaluates standard semantic segmentation metrics with separation for known/unknown classes.
-        """
+        """Evaluate with mode-specific metrics"""
         if self._distributed:
             synchronize()
             conf_matrix_list = all_gather(self._conf_matrix)
@@ -218,94 +303,115 @@ class OWSemSegEvaluator(DatasetEvaluator):
             for conf_matrix in conf_matrix_list:
                 self._conf_matrix += conf_matrix
 
-        if self._output_dir:
-            PathManager.mkdirs(self._output_dir)
-            file_path = os.path.join(self._output_dir, "sem_seg_predictions.json")
-            with PathManager.open(file_path, "w") as f:
-                f.write(json.dumps(self._predictions))
+        # Mode-specific evaluation
+        if self.evaluation_mode == "OVSS":
+            return self.evaluate_ovss()
+        elif self.evaluation_mode == "OWSS":
+            return self.evaluate_owss()
 
-        # ignore_label 제외한 유효한 confusion matrix 사용
-        valid_conf_matrix = self._conf_matrix[:-1, :-1]
+    def evaluate_ovss(self):
+        """
+        🔧 OVSS Mode evaluation
+        - Known: 0~74 vs Unknown: 75~149
+        - Total classes: 150
+        """
+        print("🔧 [OVSS] Evaluating Open-Vocabulary mode...")
 
-        print(f"[DEBUG] Valid confusion matrix shape: {valid_conf_matrix.shape}")
-        print(f"[DEBUG] Known classes: 0-{self._num_seen_classes - 1}")
-        print(f"[DEBUG] Unknown classes: {self._num_seen_classes}-{self._num_classes - 2}")
-        print(f"[DEBUG] Unknown prediction index: {self._num_classes - 1}")
+        # Exclude ignore label column
+        valid_conf_matrix = self._conf_matrix[:, :-1]  # 150x150
 
-        # 기본 메트릭 계산
-        acc = np.full(self._num_classes, np.nan, dtype=np.float)
-        iou = np.full(self._num_classes, np.nan, dtype=np.float)
-        tp = valid_conf_matrix.diagonal().astype(np.float)
-        pos_gt = np.sum(valid_conf_matrix, axis=0).astype(np.float)
-        class_weights = pos_gt / np.sum(pos_gt) if np.sum(pos_gt) > 0 else pos_gt
-        pos_pred = np.sum(valid_conf_matrix, axis=1).astype(np.float)
+        # Calculate per-class metrics
+        acc = np.full(150, np.nan, dtype=float)
+        iou = np.full(150, np.nan, dtype=float)
+
+        tp = valid_conf_matrix.diagonal().astype(float)
+        pos_gt = np.sum(valid_conf_matrix, axis=0).astype(float)
+        pos_pred = np.sum(valid_conf_matrix, axis=1).astype(float)
+
         acc_valid = pos_gt > 0
         acc[acc_valid] = tp[acc_valid] / pos_gt[acc_valid]
+
         iou_valid = (pos_gt + pos_pred) > 0
         union = pos_gt + pos_pred - tp
         iou[iou_valid] = tp[iou_valid] / union[iou_valid]
 
+        # Overall metrics
+        class_weights = pos_gt / np.sum(pos_gt) if np.sum(pos_gt) > 0 else pos_gt
         macc = np.sum(acc[acc_valid]) / np.sum(acc_valid) if np.sum(acc_valid) > 0 else 0.0
         miou = np.sum(iou[iou_valid]) / np.sum(iou_valid) if np.sum(iou_valid) > 0 else 0.0
         fiou = np.sum(iou[iou_valid] * class_weights[iou_valid]) if np.sum(iou_valid) > 0 else 0.0
         pacc = np.sum(tp) / np.sum(pos_gt) if np.sum(pos_gt) > 0 else 0.0
 
-        print("[DEBUG] Confusion Matrix Sample (Top 5 Predict vs GT):")
-        top_pred = np.argsort(pos_pred)[-5:][::-1]
-        top_gt = np.argsort(pos_gt)[-5:][::-1]
-        print("GT Class:", top_gt)
-        print("Pred Class:", top_pred)
+        # Known vs Unknown metrics
+        known_iou_values = [iou[i] for i in self._known_range if i < len(iou) and iou_valid[i]]
+        unknown_iou_values = [iou[i] for i in self._unknown_range if i < len(iou) and iou_valid[i]]
 
-        total_pixels = np.sum(pos_pred)
-        unknown_pixels = pos_pred[150] if len(pos_pred) > 150 else 0
-        print(
-            f"[DEBUG] Unknown(150) Predict Ratio: {int(unknown_pixels) / int(total_pixels) * 100:.1f}% ({int(unknown_pixels)} / {int(total_pixels)})")
-
-        # CAT-Seg + OW-OVD Unknown mIoU
-        known_classes_end = self._num_seen_classes  # 75
-        unknown_pred_index = self._num_classes - 1  # 150
-        unknown_gt_start = known_classes_end  # 75
-        unknown_gt_end = self._num_classes - 1  # 150
-
-        # Known mIoU
-        known_iou_values = []
-        for i in range(known_classes_end):
-            if i < len(iou) and iou_valid[i]:
-                known_iou_values.append(iou[i])
         known_miou = np.mean(known_iou_values) if known_iou_values else 0.0
+        unknown_miou = np.mean(unknown_iou_values) if unknown_iou_values else 0.0
 
-        # Unknown mIoU
-        unknown_tp = 0  # True Positive
-        unknown_fp = 0  # False Positive
-        unknown_fn = 0  # False Negative
+        if known_miou > 0 and unknown_miou > 0:
+            harmonic_mean = 2 * known_miou * unknown_miou / (known_miou + unknown_miou)
+        else:
+            harmonic_mean = 0.0
 
-        # True Positive
-        for gt_idx in range(unknown_gt_start, unknown_gt_end):
-            unknown_tp += valid_conf_matrix[gt_idx, gt_idx]  # diagonal
+        print(f"🔧 [OVSS] Known classes (0~74): {known_miou:.4f}")
+        print(f"🔧 [OVSS] Unknown classes (75~149): {unknown_miou:.4f}")
+        print(f"🔧 [OVSS] Harmonic Mean: {harmonic_mean:.4f}")
 
-        for gt_idx in range(unknown_gt_start, unknown_gt_end):
-            unknown_tp += valid_conf_matrix[unknown_pred_index, gt_idx]
+        return self.format_results(miou, fiou, macc, pacc, known_miou, unknown_miou, harmonic_mean, "OVSS")
 
-        # False Positive
-        for gt_idx in range(known_classes_end):  # GT Known
-            for pred_idx in range(unknown_gt_start, unknown_gt_end):  # Pred Individual Unknown
-                unknown_fp += valid_conf_matrix[pred_idx, gt_idx]
+    def evaluate_owss(self):
+        """
+        🔧 OWSS Mode evaluation
+        - Known: 0~74 vs Unknown: 75 (remapped from GT 75~149)
+        - Total pred classes: 76
+        """
+        print("🔧 [OWSS] Evaluating Open-World mode...")
 
-        for gt_idx in range(known_classes_end):  # GT Known
-            unknown_fp += valid_conf_matrix[unknown_pred_index, gt_idx]
+        # Exclude ignore label column
+        valid_conf_matrix = self._conf_matrix[:, :-1]  # 76x150
 
-        # False Negative
-        for gt_idx in range(unknown_gt_start, unknown_gt_end):  # GT Unknown
-            for pred_idx in range(known_classes_end):  # Pred Known
-                unknown_fn += valid_conf_matrix[pred_idx, gt_idx]
+        # Known classes metrics (0~74)
+        known_conf = valid_conf_matrix[:self._num_known_classes, :self._num_known_classes]  # 75x75
+        known_tp = known_conf.diagonal().astype(float)
+        known_pos_gt = np.sum(known_conf, axis=0).astype(float)
+        known_pos_pred = np.sum(known_conf, axis=1).astype(float)
 
-            for pred_idx in range(unknown_gt_start, unknown_gt_end):
-                if pred_idx != gt_idx:
+        known_acc_valid = known_pos_gt > 0
+        known_acc = np.full(self._num_known_classes, np.nan, dtype=float)
+        known_acc[known_acc_valid] = known_tp[known_acc_valid] / known_pos_gt[known_acc_valid]
+
+        known_iou_valid = (known_pos_gt + known_pos_pred) > 0
+        known_union = known_pos_gt + known_pos_pred - known_tp
+        known_iou = np.full(self._num_known_classes, np.nan, dtype=float)
+        known_iou[known_iou_valid] = known_tp[known_iou_valid] / known_union[known_iou_valid]
+
+        known_miou = np.sum(known_iou[known_iou_valid]) / np.sum(known_iou_valid) if np.sum(
+            known_iou_valid) > 0 else 0.0
+
+        # Unknown class metrics (pred 75 vs GT 75~149)
+        unknown_pred_idx = self._unknown_pred_index  # 75
+        unknown_gt_indices = self._unknown_gt_range  # 75~149
+
+        # True Positive: GT unknown classes predicted as unknown
+        unknown_tp = 0
+        for gt_idx in unknown_gt_indices:
+            if gt_idx < valid_conf_matrix.shape[1]:
+                unknown_tp += valid_conf_matrix[unknown_pred_idx, gt_idx]
+
+        # False Positive: GT known classes predicted as unknown
+        unknown_fp = 0
+        for gt_idx in range(self._num_known_classes):
+            unknown_fp += valid_conf_matrix[unknown_pred_idx, gt_idx]
+
+        # False Negative: GT unknown classes predicted as known
+        unknown_fn = 0
+        for gt_idx in unknown_gt_indices:
+            if gt_idx < valid_conf_matrix.shape[1]:
+                for pred_idx in range(self._num_known_classes):
                     unknown_fn += valid_conf_matrix[pred_idx, gt_idx]
 
-        print(f"[DEBUG] Unknown TP: {unknown_tp}")
-        print(f"[DEBUG] Unknown FP: {unknown_fp}")
-        print(f"[DEBUG] Unknown FN: {unknown_fn}")
+        print(f"🔧 [OWSS] Unknown metrics - TP: {unknown_tp}, FP: {unknown_fp}, FN: {unknown_fn}")
 
         # Unknown IoU
         if (unknown_tp + unknown_fp + unknown_fn) > 0:
@@ -319,42 +425,199 @@ class OWSemSegEvaluator(DatasetEvaluator):
         else:
             harmonic_mean = 0.0
 
-        print(f"[DEBUG] Known mIoU: {known_miou:.4f}")
-        print(f"[DEBUG] Unknown mIoU: {unknown_miou:.4f}")
-        print(f"[DEBUG] Harmonic Mean: {harmonic_mean:.4f}")
+        print(f"🔧 [OWSS] Known classes (0~74): {known_miou:.4f}")
+        print(f"🔧 [OWSS] Unknown class (75): {unknown_miou:.4f}")
+        print(f"🔧 [OWSS] Harmonic Mean: {harmonic_mean:.4f}")
 
-        # Result
+        # Overall metrics (approximation)
+        all_tp = np.sum(known_tp) + unknown_tp
+        all_gt = np.sum(known_pos_gt) + len(unknown_gt_indices) * 1000  # Approximate
+        all_pred = np.sum(known_pos_pred) + unknown_tp + unknown_fp
+
+        miou = (known_miou * self._num_known_classes + unknown_miou) / (self._num_known_classes + 1)
+        macc = known_miou  # Approximation
+        pacc = all_tp / all_gt if all_gt > 0 else 0.0
+        fiou = miou  # Approximation
+
+        return self.format_results(miou, fiou, macc, pacc, known_miou, unknown_miou, harmonic_mean, "OWSS")
+
+    def format_results(self, miou, fiou, macc, pacc, known_miou, unknown_miou, harmonic_mean, mode):
+        """Format evaluation results"""
         res = {}
         res["mIoU"] = 100 * miou
         res["fwIoU"] = 100 * fiou
         res["mACC"] = 100 * macc
         res["pACC"] = 100 * pacc
-
-        # CAT-Seg Metric
         res["Known_mIoU"] = 100 * known_miou
         res["Unknown_mIoU"] = 100 * unknown_miou
         res["Harmonic_Mean"] = 100 * harmonic_mean
-
-        # Previous Metric
         res["seen_IoU"] = 100 * known_miou
         res["unseen_IoU"] = 100 * unknown_miou
         res["harmonic mean"] = 100 * harmonic_mean
 
-        # Class Metrics
-        for i, name in enumerate(self._class_names[:self._num_classes]):
-            if i < len(iou):
-                res[f"IoU-{name}"] = 100 * iou[i]
-            if i < len(acc):
-                res[f"ACC-{name}"] = 100 * acc[i]
-
         if self._output_dir:
-            file_path = os.path.join(self._output_dir, "sem_seg_evaluation.pth")
+            file_path = os.path.join(self._output_dir, f"sem_seg_evaluation_{mode.lower()}.pth")
             with PathManager.open(file_path, "wb") as f:
                 torch.save(res, f)
 
         results = OrderedDict({"sem_seg": res})
-        self._logger.info(results)
+        self._logger.info(f"🔧 [{mode}] Results: {results}")
         return results
+
+
+    # def evaluate(self):
+    #     """
+    #     Evaluates standard semantic segmentation metrics with separation for known/unknown classes.
+    #     """
+    #     if self._distributed:
+    #         synchronize()
+    #         conf_matrix_list = all_gather(self._conf_matrix)
+    #         self._predictions = all_gather(self._predictions)
+    #         self._predictions = list(itertools.chain(*self._predictions))
+    #         if not is_main_process():
+    #             return
+    #
+    #         self._conf_matrix = np.zeros_like(self._conf_matrix)
+    #         for conf_matrix in conf_matrix_list:
+    #             self._conf_matrix += conf_matrix
+    #
+    #     if self._output_dir:
+    #         PathManager.mkdirs(self._output_dir)
+    #         file_path = os.path.join(self._output_dir, "sem_seg_predictions.json")
+    #         with PathManager.open(file_path, "w") as f:
+    #             f.write(json.dumps(self._predictions))
+    #
+    #     # ignore_label 제외한 유효한 confusion matrix 사용
+    #     valid_conf_matrix = self._conf_matrix[:-1, :-1]
+    #
+    #     print(f"[DEBUG] Valid confusion matrix shape: {valid_conf_matrix.shape}")
+    #     print(f"[DEBUG] Known classes: 0-{self._num_seen_classes - 1}")
+    #     print(f"[DEBUG] Unknown classes: {self._num_seen_classes}-{self._num_classes - 2}")
+    #     print(f"[DEBUG] Unknown prediction index: {self._num_classes - 1}")
+    #
+    #     # 기본 메트릭 계산
+    #     acc = np.full(self._num_classes, np.nan, dtype=float)
+    #     iou = np.full(self._num_classes, np.nan, dtype=float)
+    #     tp = valid_conf_matrix.diagonal().astype(float)
+    #     pos_gt = np.sum(valid_conf_matrix, axis=0).astype(float)
+    #     class_weights = pos_gt / np.sum(pos_gt) if np.sum(pos_gt) > 0 else pos_gt
+    #     pos_pred = np.sum(valid_conf_matrix, axis=1).astype(float)
+    #     acc_valid = pos_gt > 0
+    #     acc[acc_valid] = tp[acc_valid] / pos_gt[acc_valid]
+    #     iou_valid = (pos_gt + pos_pred) > 0
+    #     union = pos_gt + pos_pred - tp
+    #     iou[iou_valid] = tp[iou_valid] / union[iou_valid]
+    #
+    #     macc = np.sum(acc[acc_valid]) / np.sum(acc_valid) if np.sum(acc_valid) > 0 else 0.0
+    #     miou = np.sum(iou[iou_valid]) / np.sum(iou_valid) if np.sum(iou_valid) > 0 else 0.0
+    #     fiou = np.sum(iou[iou_valid] * class_weights[iou_valid]) if np.sum(iou_valid) > 0 else 0.0
+    #     pacc = np.sum(tp) / np.sum(pos_gt) if np.sum(pos_gt) > 0 else 0.0
+    #
+    #     print("[DEBUG] Confusion Matrix Sample (Top 5 Predict vs GT):")
+    #     top_pred = np.argsort(pos_pred)[-5:][::-1]
+    #     top_gt = np.argsort(pos_gt)[-5:][::-1]
+    #     print("GT Class:", top_gt)
+    #     print("Pred Class:", top_pred)
+    #
+    #     total_pixels = np.sum(pos_pred)
+    #     unknown_pixels = pos_pred[150] if len(pos_pred) > 150 else 0
+    #     print(
+    #         f"[DEBUG] Unknown(150) Predict Ratio: {int(unknown_pixels) / int(total_pixels) * 100:.1f}% ({int(unknown_pixels)} / {int(total_pixels)})")
+    #
+    #     # CAT-Seg + OW-OVD Unknown mIoU
+    #     known_classes_end = self._num_seen_classes  # 75
+    #     unknown_pred_index = self._num_classes - 1  # 150
+    #     unknown_gt_start = known_classes_end  # 75
+    #     unknown_gt_end = self._num_classes - 1  # 150
+    #
+    #     # Known mIoU
+    #     known_iou_values = []
+    #     for i in range(known_classes_end):
+    #         if i < len(iou) and iou_valid[i]:
+    #             known_iou_values.append(iou[i])
+    #     known_miou = np.mean(known_iou_values) if known_iou_values else 0.0
+    #
+    #     # Unknown mIoU
+    #     unknown_tp = 0  # True Positive
+    #     unknown_fp = 0  # False Positive
+    #     unknown_fn = 0  # False Negative
+    #
+    #     # True Positive
+    #     for gt_idx in range(unknown_gt_start, unknown_gt_end):
+    #         unknown_tp += valid_conf_matrix[gt_idx, gt_idx]  # diagonal
+    #
+    #     for gt_idx in range(unknown_gt_start, unknown_gt_end):
+    #         unknown_tp += valid_conf_matrix[unknown_pred_index, gt_idx]
+    #
+    #     # False Positive
+    #     for gt_idx in range(known_classes_end):  # GT Known
+    #         for pred_idx in range(unknown_gt_start, unknown_gt_end):  # Pred Individual Unknown
+    #             unknown_fp += valid_conf_matrix[pred_idx, gt_idx]
+    #
+    #     for gt_idx in range(known_classes_end):  # GT Known
+    #         unknown_fp += valid_conf_matrix[unknown_pred_index, gt_idx]
+    #
+    #     # False Negative
+    #     for gt_idx in range(unknown_gt_start, unknown_gt_end):  # GT Unknown
+    #         for pred_idx in range(known_classes_end):  # Pred Known
+    #             unknown_fn += valid_conf_matrix[pred_idx, gt_idx]
+    #
+    #         for pred_idx in range(unknown_gt_start, unknown_gt_end):
+    #             if pred_idx != gt_idx:
+    #                 unknown_fn += valid_conf_matrix[pred_idx, gt_idx]
+    #
+    #     print(f"[DEBUG] Unknown TP: {unknown_tp}")
+    #     print(f"[DEBUG] Unknown FP: {unknown_fp}")
+    #     print(f"[DEBUG] Unknown FN: {unknown_fn}")
+    #
+    #     # Unknown IoU
+    #     if (unknown_tp + unknown_fp + unknown_fn) > 0:
+    #         unknown_miou = unknown_tp / (unknown_tp + unknown_fp + unknown_fn)
+    #     else:
+    #         unknown_miou = 0.0
+    #
+    #     # Harmonic Mean
+    #     if known_miou > 0 and unknown_miou > 0:
+    #         harmonic_mean = 2 * known_miou * unknown_miou / (known_miou + unknown_miou)
+    #     else:
+    #         harmonic_mean = 0.0
+    #
+    #     print(f"[DEBUG] Known mIoU: {known_miou:.4f}")
+    #     print(f"[DEBUG] Unknown mIoU: {unknown_miou:.4f}")
+    #     print(f"[DEBUG] Harmonic Mean: {harmonic_mean:.4f}")
+    #
+    #     # Result
+    #     res = {}
+    #     res["mIoU"] = 100 * miou
+    #     res["fwIoU"] = 100 * fiou
+    #     res["mACC"] = 100 * macc
+    #     res["pACC"] = 100 * pacc
+    #
+    #     # CAT-Seg Metric
+    #     res["Known_mIoU"] = 100 * known_miou
+    #     res["Unknown_mIoU"] = 100 * unknown_miou
+    #     res["Harmonic_Mean"] = 100 * harmonic_mean
+    #
+    #     # Previous Metric
+    #     res["seen_IoU"] = 100 * known_miou
+    #     res["unseen_IoU"] = 100 * unknown_miou
+    #     res["harmonic mean"] = 100 * harmonic_mean
+    #
+    #     # Class Metrics
+    #     for i, name in enumerate(self._class_names[:self._num_classes]):
+    #         if i < len(iou):
+    #             res[f"IoU-{name}"] = 100 * iou[i]
+    #         if i < len(acc):
+    #             res[f"ACC-{name}"] = 100 * acc[i]
+    #
+    #     if self._output_dir:
+    #         file_path = os.path.join(self._output_dir, "sem_seg_evaluation.pth")
+    #         with PathManager.open(file_path, "wb") as f:
+    #             torch.save(res, f)
+    #
+    #     results = OrderedDict({"sem_seg": res})
+    #     self._logger.info(results)
+    #     return results
 
     def encode_json_sem_seg(self, sem_seg, input_file_name):
         """

@@ -8,6 +8,18 @@ MODEL:
     IN_FEATURES: ["res2", "res3", "res4"]
     IGNORE_VALUE: 255
 
+    # 🔧 NEW: Mode selection
+    EVALUATION_MODE: "OVSS"  # "OVSS" or "OWSS"
+    # OVSS Mode: Open-Vocabulary Semantic Segmentation
+    # - 0~74: Known classes (text)
+    # - 75~149: Unknown classes (text)
+    # - Total: 150 classes
+
+    # OWSS Mode: Open-World Semantic Segmentation
+    # - 0~74: Known classes (text)
+    # - 75~149 → 150: Unknown classes (attributes)
+    # - Total: 75 + 1 = 76 classes
+
     #NUM_CLASSES: 171
     NUM_CLASSES_TRAIN: 171
     NUM_CLASSES_TEST: 150
@@ -84,6 +96,5 @@ SOLVER:
 TEST:
   EVAL_PERIOD: 0 #5000->100
 
-
-ATTRIBUTE_LOG_START_ITER: 0    # ← 이 값이 실제로 사용됨
-ATTRIBUTE_SELECT_ITER: 5000      # ← 이 값이 실제로 사용됨
+ATTRIBUTE_LOG_START_ITER: 0
+ATTRIBUTE_SELECT_ITER: 5000
