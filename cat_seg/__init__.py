@@ -19,6 +19,7 @@ from .data.dataset_mappers.ow_mask_former_semantic_dataset_mapper import (
 
 # models
 from .cat_seg_model import CATSeg
+from .modeling.heads.cat_seg_head import CATSegHead
 from .test_time_augmentation import SemanticSegmentorWithTTA
 
 # ow-ovss

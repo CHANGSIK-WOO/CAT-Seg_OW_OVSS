@@ -314,43 +314,46 @@ class OWCATSegHead(nn.Module):
 
         print(f"Attribute selection completed: selected {len(selected_indices)} attributes")
 
-
-    def log_distribution(self, att_scores, gt_labels, gt_masks):
-        """Log distribution of attributes for known/unknown classes."""
+    def log_distribution(self, att_scores, assigned_scores, valid_masks):
+        """
+        Args:
+            att_scores: [B, C_att, H, W] - attribute prediction score (before applying sigmoid)
+            assigned_scores: [B, C_known, H, W] - current classes' prediction score
+            valid_masks: [B, H, W] - not ignore_label's mask (not ignore_label)
+        """
         if not self.training or self.positive_distributions is None or self.att_embeddings is None:
             print("log_distribution no condition : return")
             return
 
-        att_scores = att_scores.float()
-        B, C, H, W = att_scores.shape
-        att_scores = att_scores.sigmoid()
+        num_att = att_scores.shape[1]
+        num_known = assigned_scores.shape[1]
 
-        for b in range(B):
-            for idx, thr in enumerate(self.thrs):
-                # Process only valid regions
-                valid_mask = (gt_labels[b] != self.ignore_label)
-                if not valid_mask.any():
-                    continue
+        # flatten [B*H*W, C]
+        att_scores = att_scores.sigmoid().permute(0, 2, 3, 1).reshape(-1, num_att).float()
+        assigned_scores = assigned_scores.permute(0, 2, 3, 1).reshape(-1, num_known)
+        valid_masks = valid_masks.reshape(-1)
 
-                gt_labels_valid = gt_labels[b][valid_mask]
-                att_scores_valid = att_scores[b][:, valid_mask]  # C x N
+        # apply valid masks
+        att_scores = att_scores[valid_masks]  # [N_valid, C_att]
+        assigned_scores = assigned_scores[valid_masks]  # [N_valid, C_known]
 
-                # Determine positive/negative based on known classes
-                positive = (gt_labels_valid < self.unknown_class_index) & (gt_labels_valid >= self.prev_intro_cls + self.cur_intro_cls)
-                print(f"positive : {positive}")
+        if att_scores.size(0) == 0:
+            return
 
-                if positive.any():
-                    positive_scores = att_scores_valid[:, positive].T  # N_pos x C
-                    for att_i in range(C):
-                        self.positive_distributions[idx][att_i] += torch.histc(positive_scores[:, att_i], bins=int(1 / 0.0001), min=0, max=1)
+        # distribution update per thrs
+        for idx, thr in enumerate(self.thrs):
+            # assigned_scores >= thr -> positive/negative
+            positive = (assigned_scores >= thr)  # pixel that model have confidence to current class
+            positive_scores = att_scores[positive]  # [N_pos, C_att]
+            negative_scores = att_scores[~positive]  # [N_neg, C_att]
 
-                if (~positive).any():
-                    negative_scores = att_scores_valid[:, ~positive].T  # N_neg x C
-                    for att_i in range(C):
-                        self.negative_distributions[idx][att_i] += torch.histc(negative_scores[:, att_i], bins=int(1 / 0.0001), min=0, max=1)
-
+            # distribution updates using histogram
+            for att_i in range(num_att):
+                if positive_scores.size(0) > 0:
+                    self.positive_distributions[idx][att_i] += torch.histc(positive_scores[:, att_i], bins=int(1 / 0.0001), min=0, max=1)
+                if negative_scores.size(0) > 0:
+                    self.negative_distributions[idx][att_i] += torch.histc(negative_scores[:, att_i], bins=int(1 / 0.0001), min=0, max=1)
         print("log_distribution finish")
-
 
     def forward(self, features, guidance_features, prompt=None, gt_cls=None):
         """

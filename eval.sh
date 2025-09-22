@@ -38,7 +38,7 @@ python ow_train_net.py --config $config \
  DATASETS.TEST \(\"ade20k_150_ow_val_sem_seg\"\,\) \
  TEST.SLIDING_WINDOW "True" \
  MODEL.SEM_SEG_HEAD.POOLING_SIZES "[1,1]" \
- MODEL.WEIGHTS $output/model_final.pth \
+ MODEL.WEIGHTS $output/model_base.pth \
  $opts
 #
 ##ADE20k-150
