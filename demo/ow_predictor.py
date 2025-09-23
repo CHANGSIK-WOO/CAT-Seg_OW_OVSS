@@ -33,16 +33,7 @@ class OWVisualizer(Visualizer):
 
     def draw_sem_seg_with_unknown(self, sem_seg, area_threshold=None, alpha=0.8,
                                   show_class_names=True, show_unknown_regions=True):
-        """
-        Draw semantic segmentation with special handling for unknown classes.
-
-        Args:
-            sem_seg (Tensor or ndarray): the segmentation of shape (H, W).
-            area_threshold (int): segments with less than `area_threshold` are not drawn.
-            alpha (float): transparency level for the overlay
-            show_class_names (bool): whether to show class names
-            show_unknown_regions (bool): whether to highlight unknown regions
-        """
+        """Draw semantic segmentation with special handling for unknown classes."""
         if isinstance(sem_seg, torch.Tensor):
             sem_seg = sem_seg.numpy()
 
@@ -50,15 +41,11 @@ class OWVisualizer(Visualizer):
         sorted_idxs = np.argsort(-areas).tolist()
         labels = labels[sorted_idxs]
 
-        # Create a colormap for visualization
         binary_masks = []
         class_names = []
         colors = []
 
         for label in labels:
-            if label >= len(self.metadata.stuff_classes):
-                continue  # Skip invalid labels
-
             # Filter by area if specified
             if area_threshold is not None and areas[label] < area_threshold:
                 continue
@@ -66,22 +53,22 @@ class OWVisualizer(Visualizer):
             mask = (sem_seg == label)
             binary_masks.append(mask)
 
-            # Get class name
-            if label < len(self.metadata.stuff_classes):
-                class_name = self.metadata.stuff_classes[label]
-            else:
-                class_name = f"class_{label}"
-
-            # Mark unknown classes
-            if label >= self.unknown_classes_start:
+            # 🔧 수정: OWSS 모드에서 unknown 클래스 처리
+            if label == self.unknown_classes_start:  # 정확히 75번만 unknown
+                class_name = "UNKNOWN"
                 if show_unknown_regions:
-                    class_name = f"UNKNOWN: {class_name}"
                     colors.append([1.0, 0.0, 0.0])  # Red for unknown
                 else:
-                    continue  # Skip unknown if not showing them
-            else:
-                # Use default colormap for known classes
-                colors.append(None)  # Will use default color
+                    continue
+            elif label < self.unknown_classes_start:  # 0~74: known classes
+                # Known class names (first 75 classes from ADE150)
+                if label < len(self.metadata.stuff_classes):
+                    class_name = self.metadata.stuff_classes[label]
+                else:
+                    class_name = f"class_{label}"
+                colors.append(None)  # Use default color
+            else:  # > 75: invalid
+                continue
 
             class_names.append(class_name)
 

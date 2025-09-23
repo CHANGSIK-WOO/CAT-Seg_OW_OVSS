@@ -139,7 +139,7 @@ def main():
     class_prompts = build_class_prompts(classes)  # C * T
     class_emb_all = clip_encode_text(class_prompts, model, tokenizer, device=args.device)
     class_emb = average_by_chunks(class_emb_all, chunk=len(CLASS_TEMPLATES))  # [C, D]
-    cls_out = os.path.join(args.out_dir, "cls_embeddings.npy")
+    cls_out = os.path.join(args.out_dir, "cls_embeddings_original_sequence.npy")
     save_cls_embeddings(cls_out, class_emb)
     print(f"Saved class embeddings to {cls_out} with shape {tuple(class_emb.shape)}")
 
@@ -171,7 +171,7 @@ def main():
 
     att_emb = torch.cat(grouped_embs, dim=0)  # [N_attr, D]
 
-    att_out = os.path.join(args.out_dir, "att_embeddings.pth")
+    att_out = os.path.join(args.out_dir, "att_embeddings_coco_claude.pth")
     save_att_embeddings(att_out, att_emb, grouped_texts, grouped_cats)
     print(f"Saved attribute embeddings to {att_out} with shape {tuple(att_emb.shape)}")
     print("Done.")

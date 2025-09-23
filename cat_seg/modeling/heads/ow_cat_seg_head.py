@@ -172,6 +172,32 @@ class OWCATSegHead(nn.Module):
 
         return jensen_shannon_divergence(a, b)
 
+    # def get_sim(self, a, b):
+    #     """
+    #     Calculate Jensen-Shannon Divergence between two distributions
+    #     Lower JSD means distributions are more similar (less discriminative)
+    #     Higher JSD means distributions are more different (more discriminative)
+    #     """
+    #
+    #     def jensen_shannon_divergence(p, q):
+    #         # Ensure distributions are valid
+    #         p = p.clamp(min=1e-8)
+    #         q = q.clamp(min=1e-8)
+    #
+    #         # Calculate M = (P + Q) / 2
+    #         m = 0.5 * (p + q)
+    #         m = m.clamp(min=1e-8)
+    #
+    #         # Calculate KL divergences
+    #         kl_pm = torch.sum(p * torch.log(p / m))
+    #         kl_qm = torch.sum(q * torch.log(q / m))
+    #
+    #         # JSD = 0.5 * (KL(P||M) + KL(Q||M))
+    #         js_div = 0.5 * (kl_pm + kl_qm)
+    #         return js_div
+    #
+    #     return jensen_shannon_divergence(a, b)
+
     def get_all_dis_sim(self, positive_dis, negative_dis):
         dis_sim = []
         for i in range(len(positive_dis)):
@@ -182,178 +208,200 @@ class OWCATSegHead(nn.Module):
             dis_sim.append(self.get_sim(positive, negative))
         return torch.stack(dis_sim).to('cuda')
 
-    # def select_att(self, per_class=25):
-    #     """Select attributes based on distribution similarity and diversity."""
-    #     if self.distributions is None or self.att_embeddings is None:
-    #         return
-    #
-    #     distributions = torch.load(self.distributions, map_location='cuda')
-    #     self.positive_distributions, self.negative_distributions = distributions['positive_distributions'], \
-    #     distributions['negative_distributions']
-    #
-    #     thr_id = self.thrs.index(self.thr)
-    #     distribution_sim = self.get_all_dis_sim(self.positive_distributions[thr_id],
-    #                                             self.negative_distributions[thr_id])
-    #
-    #     all_atts = self.all_atts.to(self.att_embeddings.device)
-    #     att_embeddings_norm = F.normalize(all_atts, p=2, dim=1)
-    #     if self.use_sigmoid:
-    #         cosine_sim_matrix = torch.matmul(att_embeddings_norm, att_embeddings_norm.T).sigmoid()
-    #     else:
-    #         cosine_sim_matrix = torch.matmul(att_embeddings_norm, att_embeddings_norm.T).abs()
-    #
-    #     selected_indices = []
-    #     for _ in range(per_class * self.num_classes):
-    #         if len(selected_indices) == 0:
-    #             _, idx = distribution_sim.min(dim=0)
-    #         else:
-    #             unselected_indices = list(set(range(len(self.texts))) - set(selected_indices))
-    #             cosine_sim_with_selected = cosine_sim_matrix[unselected_indices][:, selected_indices].mean(dim=1)
-    #             distribution_sim_unselected = distribution_sim[unselected_indices]
-    #             score = self.alpha * distribution_sim_unselected + (1 - self.alpha) * cosine_sim_with_selected
-    #             idx = unselected_indices[score.argmin()]
-    #         selected_indices.append(idx)
-    #
-    #     selected_indices = torch.tensor(selected_indices).to(self.att_embeddings.device)
-    #     self.att_embeddings = torch.nn.Parameter(all_atts[selected_indices]).to(self.att_embeddings.device)
-    #     self.texts = [self.texts[i] for i in selected_indices]
-    #
-    #     print(f"Attribute selection completed: selected {len(selected_indices)} attributes from current training data")
-
     def select_att(self, per_class=25):
-        """Select attributes based on distribution similarity and diversity."""
-        print(f"self.att_embeddings is None: {self.att_embeddings is None}")
-        print(f"self.positive_distributions is None : {self.positive_distributions}")
-        print(f"self.negative_distributions is None : {self.negative_distributions}")
-        print(f"self.distributions is None : {self.distributions}")
+        """
+        Step 5: Iterative Attribute Selection (VSAS)
+
+        Implementation of Visual Similarity Attribute Selection algorithm
+        """
+        print(f"=== Step 5: Iterative Attribute Selection ===")
+        print(f"att_embeddings available: {self.att_embeddings is not None}")
+        print(f"positive_distributions available: {self.positive_distributions is not None}")
+        print(f"negative_distributions available: {self.negative_distributions is not None}")
+        print(f"distributions file path: {self.distributions}")
 
         if self.att_embeddings is None:
-            print("No att_embeddings available, skipping attribute selection")
+            print("❌ No att_embeddings available, skipping attribute selection")
             return
 
-        if (self.positive_distributions is None or self.negative_distributions is None):
-            print("No distributions collected in current training, skipping attribute selection")
-            return
-
-        import os
+        # Load existing distributions if available
+        saved_positive, saved_negative = None, None
         if self.distributions is not None and os.path.exists(self.distributions):
-            print(f"Loading existing distributions from {self.distributions}")
+            print(f"📂 Loading existing distributions from {self.distributions}")
             try:
-                # 기존 파일에서 데이터 로드
                 distributions = torch.load(self.distributions, map_location='cuda')
                 saved_positive = distributions['positive_distributions']
                 saved_negative = distributions['negative_distributions']
-
-                # 기존 데이터와 현재 수집된 데이터를 결합/업데이트
-                thr_id = self.thrs.index(self.thr)
-
-                # 기존 데이터를 사용하여 계산
-                distribution_sim = self.get_all_dis_sim(saved_positive[thr_id],
-                                                        saved_negative[thr_id])
-                print("Using existing distributions for attribute selection")
-
+                print("✅ Successfully loaded existing distributions")
             except Exception as e:
-                print(f"Error loading existing distributions: {e}")
-                print("Falling back to current training data")
-                # 에러 발생시 현재 데이터 사용
-                thr_id = self.thrs.index(self.thr)
-                distribution_sim = self.get_all_dis_sim(self.positive_distributions[thr_id],
-                                                        self.negative_distributions[thr_id])
-        else:
-            print("No existing distributions found, using current training data")
-            # 파일이 없으면 현재 수집된 데이터만 사용
+                print(f"❌ Error loading existing distributions: {e}")
+
+        # Use current training data or saved data
+        if (self.positive_distributions is not None and self.negative_distributions is not None):
+            print("📊 Using current training distributions")
             thr_id = self.thrs.index(self.thr)
-            distribution_sim = self.get_all_dis_sim(self.positive_distributions[thr_id],
-                                                    self.negative_distributions[thr_id])
+            current_positive = self.positive_distributions[thr_id]
+            current_negative = self.negative_distributions[thr_id]
 
-        # 전체 attribute 개수 확인
-        #total_attributes = len(self.texts)
+            # Combine with saved data if available
+            if saved_positive is not None and saved_negative is not None:
+                print("🔄 Combining current and saved distributions")
+                combined_positive = {}
+                combined_negative = {}
+                for att_i in range(len(current_positive)):
+                    combined_positive[att_i] = current_positive[att_i] + saved_positive[thr_id][att_i]
+                    combined_negative[att_i] = current_negative[att_i] + saved_negative[thr_id][att_i]
+                use_positive, use_negative = combined_positive, combined_negative
+            else:
+                use_positive, use_negative = current_positive, current_negative
+
+        elif saved_positive is not None and saved_negative is not None:
+            print("📂 Using only saved distributions")
+            thr_id = self.thrs.index(self.thr)
+            use_positive, use_negative = saved_positive[thr_id], saved_negative[thr_id]
+        else:
+            print("❌ No distributions available for selection")
+            return
+
+        # Step 5: Calculate JSD for each attribute
+        distribution_similarities = self.calculate_all_jsd(use_positive, use_negative)
+
+        # Get total number of attributes and target selection count
         total_attributes = self.att_embeddings.shape[0]
-        target_selection_count = per_class * self.num_classes_train
+        target_selection_count = min(per_class * self.num_classes_train, total_attributes)
 
-        # 선택하려는 개수가 전체보다 많으면 제한
-        actual_selection_count = min(target_selection_count, total_attributes)
-        print(
-            f"Total attributes: {total_attributes}, Target: {target_selection_count}, Actual: {actual_selection_count}")
+        print(f"🎯 Target selection: {target_selection_count}/{total_attributes} attributes")
 
-        # attribute selection 로직
+        # Step 5: Iterative Attribute Selection
         all_atts = self.all_atts.to(self.att_embeddings.device)
         att_embeddings_norm = F.normalize(all_atts, p=2, dim=1)
+
+        # Precompute cosine similarity matrix for redundancy penalty
         if self.use_sigmoid:
             cosine_sim_matrix = torch.matmul(att_embeddings_norm, att_embeddings_norm.T).sigmoid()
         else:
             cosine_sim_matrix = torch.matmul(att_embeddings_norm, att_embeddings_norm.T).abs()
 
+        # Step 5.34-39: Iterative selection with JSD and redundancy penalty
         selected_indices = []
-        for _ in range(actual_selection_count):  # ← 수정: 실제 선택 가능한 개수로 제한
-            if len(selected_indices) == 0:
-                _, idx = distribution_sim.min(dim=0)
+
+        for iteration in range(target_selection_count):
+            if iteration == 0:
+                # Step 5.36: First selection - minimize JSD (최소 JSD = 최대 차이)
+                _, idx = distribution_similarities.min(dim=0)
+                idx = idx.item()
             else:
+                # Step 5.36-37: Subsequent selections with redundancy penalty
                 unselected_indices = list(set(range(total_attributes)) - set(selected_indices))
 
-                # 빈 리스트 체크
                 if len(unselected_indices) == 0:
-                    print(f"All attributes selected. Total selected: {len(selected_indices)}")
+                    print(f"⚠️ All attributes selected at iteration {iteration}")
                     break
 
+                # Calculate redundancy penalty for unselected attributes
                 cosine_sim_with_selected = cosine_sim_matrix[unselected_indices][:, selected_indices].mean(dim=1)
-                distribution_sim_unselected = distribution_sim[unselected_indices]
-                score = self.alpha * distribution_sim_unselected + (1 - self.alpha) * cosine_sim_with_selected
+                distribution_sim_unselected = distribution_similarities[unselected_indices]
 
-                # score가 빈 텐서인지 체크
-                if score.numel() == 0:
-                    print("Score tensor is empty, stopping selection")
-                    break
+                # Step 5.36-37: β * JSD + (1-β) * RedundancyPenalty
+                selection_score = self.alpha * distribution_sim_unselected + (1 - self.alpha) * cosine_sim_with_selected
 
-                idx = unselected_indices[score.argmin()]
+                # Select attribute with minimum combined score
+                min_score_idx = selection_score.argmin()
+                idx = unselected_indices[min_score_idx.item()]
+
             selected_indices.append(idx)
 
+            if (iteration + 1) % 100 == 0:
+                print(f"🔄 Selected {iteration + 1}/{target_selection_count} attributes")
+
+        # Step 5.38: Update selected attributes
         selected_indices = torch.tensor(selected_indices).to(self.att_embeddings.device)
         self.att_embeddings = torch.nn.Parameter(all_atts[selected_indices]).to(self.att_embeddings.device)
         self.texts = [self.texts[i] for i in selected_indices]
 
-        print(f"Attribute selection completed: selected {len(selected_indices)} attributes")
+        print(f"✅ Attribute selection completed: {len(selected_indices)} attributes selected")
+        print(
+            f"📈 Final JSD range: {distribution_similarities[selected_indices].min():.4f} - {distribution_similarities[selected_indices].max():.4f}")
+
+    def calculate_all_jsd(self, positive_distributions, negative_distributions):
+        """
+        Step 4.26-32: Calculate Jensen-Shannon Divergence for all attributes
+
+        Returns:
+            torch.Tensor: JSD values for each attribute [num_attributes]
+        """
+        jsd_values = []
+
+        for att_i in range(len(positive_distributions)):
+            positive_dist = positive_distributions[att_i]
+            negative_dist = negative_distributions[att_i]
+
+            # Normalize distributions
+            positive_normalized = positive_dist / (positive_dist.sum() + 1e-8)
+            negative_normalized = negative_dist / (negative_dist.sum() + 1e-8)
+
+            # Calculate JSD
+            jsd = self.get_sim(positive_normalized, negative_normalized)
+            jsd_values.append(jsd)
+
+        return torch.stack(jsd_values).to('cuda')
 
     def log_distribution(self, att_scores, assigned_scores, valid_masks):
         """
+        Step 3-4: Distribution Construction & Similarity Calculation
         Args:
-            att_scores: [B, C_att, H, W] - attribute prediction score (before applying sigmoid)
-            assigned_scores: [B, C_known, H, W] - current classes' prediction score
-            valid_masks: [B, H, W] - not ignore_label's mask (not ignore_label)
+            att_scores: [B, C_att, H, W] - attribute prediction scores (after sigmoid)
+            assigned_scores: [B, C_known, H, W] - known class prediction scores  
+            valid_masks: [B, H, W] - valid pixel mask (not ignore_label)
         """
         if not self.training or self.positive_distributions is None or self.att_embeddings is None:
-            print("log_distribution no condition : return")
+            print("log_distribution: conditions not met, returning")
             return
 
         num_att = att_scores.shape[1]
         num_known = assigned_scores.shape[1]
 
-        # flatten [B*H*W, C]
-        att_scores = att_scores.sigmoid().permute(0, 2, 3, 1).reshape(-1, num_att).float()
-        assigned_scores = assigned_scores.permute(0, 2, 3, 1).reshape(-1, num_known)
-        valid_masks = valid_masks.reshape(-1)
+        # Flatten for processing [B*H*W, C]
+        att_scores_flat = att_scores.sigmoid().permute(0, 2, 3, 1).reshape(-1, num_att).float()
+        assigned_scores_flat = assigned_scores.permute(0, 2, 3, 1).reshape(-1, num_known)
+        valid_masks_flat = valid_masks.reshape(-1)
 
-        # apply valid masks
-        att_scores = att_scores[valid_masks]  # [N_valid, C_att]
-        assigned_scores = assigned_scores[valid_masks]  # [N_valid, C_known]
+        # Apply valid masks
+        att_scores_valid = att_scores_flat[valid_masks_flat]  # [N_valid, C_att]
+        assigned_scores_valid = assigned_scores_flat[valid_masks_flat]  # [N_valid, C_known]
 
-        if att_scores.size(0) == 0:
+        if att_scores_valid.size(0) == 0:
             return
 
-        # distribution update per thrs
-        for idx, thr in enumerate(self.thrs):
-            # assigned_scores >= thr -> positive/negative
-            positive = (assigned_scores >= thr)  # pixel that model have confidence to current class
-            positive_scores = att_scores[positive]  # [N_pos, C_att]
-            negative_scores = att_scores[~positive]  # [N_neg, C_att]
+        print(f"Processing {att_scores_valid.size(0)} valid pixels for distribution logging")
+        # Step 3: Distribution Construction
+        # For each threshold, separate positive and negative based on known class confidence
+        for thr_idx, thr in enumerate(self.thrs):
+            # Step 3.16-22: MatchedScores threshold-based separation
+            # Get maximum confidence across known classes for each pixel
+            max_known_scores = assigned_scores_valid.max(dim=1)[0]  # [N_valid]
 
-            # distribution updates using histogram
+            # Separate positive (confident) and negative (uncertain) pixels
+            positive_mask = max_known_scores >= thr  # High confidence in known classes
+            negative_mask = ~positive_mask  # Low confidence in known classes
+
+            positive_att_scores = att_scores_valid[positive_mask]  # [N_pos, C_att]
+            negative_att_scores = att_scores_valid[negative_mask]  # [N_neg, C_att]
+
+            print(f"Threshold {thr}: {positive_mask.sum()} positive, {negative_mask.sum()} negative pixels")
+
+            # Step 4: Similarity Calculation & Distribution Update
+            # For each attribute, calculate similarity distributions
             for att_i in range(num_att):
-                if positive_scores.size(0) > 0:
-                    self.positive_distributions[idx][att_i] += torch.histc(positive_scores[:, att_i], bins=int(1 / 0.0001), min=0, max=1)
-                if negative_scores.size(0) > 0:
-                    self.negative_distributions[idx][att_i] += torch.histc(negative_scores[:, att_i], bins=int(1 / 0.0001), min=0, max=1)
-        print("log_distribution finish")
+                if positive_att_scores.size(0) > 0:
+                    # Positive distribution: similarity scores when model is confident about known classes
+                    self.positive_distributions[thr_idx][att_i] += torch.histc(positive_att_scores[:, att_i], bins=int(1 / 0.0001), min=0, max=1)
+
+                if negative_att_scores.size(0) > 0:
+                    # Negative distribution: similarity scores when model is uncertain about known classes
+                    self.negative_distributions[thr_idx][att_i] += torch.histc(negative_att_scores[:, att_i], bins=int(1 / 0.0001), min=0, max=1)
+
+        print("Distribution logging completed")
 
     def forward(self, features, guidance_features, prompt=None, gt_cls=None):
         """

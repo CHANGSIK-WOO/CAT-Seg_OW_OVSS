@@ -200,23 +200,31 @@ class OWCATSeg(nn.Module):
                 if hasattr(self.sem_seg_head, 'att_embeddings') and self.sem_seg_head.att_embeddings is not None:
                     # Get attribute predictions for logging
                     att_features = self.sem_seg_head.att_embeddings[None].repeat(clip_features.shape[0], 1, 1)
-                    att_outputs = self.sem_seg_head.predictor(
-                        rearrange(clip_features[:, 1:, :], "B (H W) C -> B C H W", H=self.h, W=self.w),
-                        features,
-                        None,
-                        None,
-                        att_features,
-                        False)
+                    att_outputs = self.sem_seg_head.predictor(rearrange(clip_features[:, 1:, :], "B (H W) C -> B C H W", H=self.h, W=self.w),
+                                                              features,
+                                                              None,
+                                                              None,
+                                                              att_features,
+                                                              False)
                     att_outputs = F.interpolate(att_outputs, size=(targets.shape[-2], targets.shape[-1]), mode="bilinear", align_corners=False)
 
-                    # (previous code until 25.09.21) if self.sem_seg_head.distributions is not None:
-                    if self.training:
-                        print(f"ow_cat_seg_model log_distribution")
-                        self.sem_seg_head.log_distribution(att_outputs, targets, targets != self.ignore_label)
+                    # 2. Known class predictions 계산 (현재 학습 중인 클래스만)
+                    with torch.no_grad():  # 메모리 절약
+                        # OWSS 모드에서는 known classes만 사용
+                        if hasattr(self.sem_seg_head, 'num_classes_train'):
+                            known_classes_end = min(75, self.sem_seg_head.num_classes_train)  # 첫 75개 클래스만
+                        else:
+                            known_classes_end = 75
+
+                        # Known classes만의 predictions 추출
+                        known_outputs = outputs[:, :known_classes_end, :, :]  # [B, 75, H, W]
+
+                    # 3. Distribution logging
+                    valid_masks = targets != self.ignore_label
+                    self.sem_seg_head.log_distribution(att_outputs, known_outputs, valid_masks)
 
                 num_classes = outputs.shape[1]
                 mask = targets != self.ignore_label
-
                 outputs = outputs.permute(0,2,3,1)
                 _targets = torch.zeros(outputs.shape, device=self.device)
                 _onehot = F.one_hot(targets[mask], num_classes=num_classes).float()

@@ -14,6 +14,8 @@ from detectron2.layers import Conv2d
 from .model import Aggregator
 from cat_seg.third_party import clip
 from cat_seg.third_party import imagenet_templates
+from detectron2.data import DatasetCatalog, MetadataCatalog
+
 
 import numpy as np
 import open_clip
@@ -22,6 +24,7 @@ class OWCATSegPredictor(nn.Module):
     def __init__(
         self,
         *,
+        dataset_name,
         train_class_json: str,
         test_class_json: str,
         clip_pretrained: str,
@@ -116,6 +119,10 @@ class OWCATSegPredictor(nn.Module):
         self.evaluation_mode = evaluation_mode
         self.num_known_classes = prev_intro_cls + cur_intro_cls
 
+        meta = MetadataCatalog.get(dataset_name)
+        self._known_class_indices = set(meta.known_class_indices)  # Known Classes' indices
+        self._unknown_class_indices = set(meta.unknown_class_indices)  # Unknown Classes' indices
+
         print(f"[INIT] Evaluation Mode : {self.evaluation_mode}")
         if self.evaluation_mode == "OVSS":
             print(f"OVSS : Known (0~{self.num_known_classes-1} | Unknown ({self.num_known_classes}~{self.unknown_class_index-1}")
@@ -150,7 +157,7 @@ class OWCATSegPredictor(nn.Module):
     @classmethod
     def from_config(cls, cfg):#, in_channels, mask_classification:
         ret = {}
-
+        ret["dataset_name"] = cfg.DATASETS.TEST[0] if len(cfg.DATASETS.TEST) else cfg.DATASETS.TRAIN[0]
         ret["train_class_json"] = cfg.MODEL.SEM_SEG_HEAD.TRAIN_CLASS_JSON
         ret["test_class_json"] = cfg.MODEL.SEM_SEG_HEAD.TEST_CLASS_JSON
         ret["clip_pretrained"] = cfg.MODEL.SEM_SEG_HEAD.CLIP_PRETRAINED
@@ -274,7 +281,7 @@ class OWCATSegPredictor(nn.Module):
         if self.training:
             text = self.class_texts  # COCO classes for training
         else:
-            text = self.test_class_texts[:self.num_known_classes]  # Only first 75 classes
+            text = [self.test_class_texts[i] for i in self._known_class_indices]
 
         print(f"  Using {len(text)} known classes for text embedding")
 
