@@ -51,22 +51,28 @@ def _get_ade20k_150_meta():
         "sculpture", "hood", "sconce", "tray", "ashcan", "fan", "pier", "crt screen",
         "plate", "monitor", "bulletin board", "shower", "radiator", "flag"
     ]
-    original_sequence_class_indices = [
+    # Known/Unknown 인덱스 매핑 (평가용)
+    # 변경했던 순서에서 0~74였던 클래스들의 원본 인덱스
+    known_class_indices = [
         4, 6, 7, 9, 10, 12, 15, 16, 18, 19, 20, 24, 25, 26, 28, 32, 34, 38, 45, 46,
         47, 48, 49, 52, 56, 59, 60, 64, 65, 66, 67, 68, 75, 79, 80, 81, 82, 89, 97, 113,
         117, 123, 126, 130, 134, 135, 147, 0, 1, 2, 3, 5, 8, 11, 13, 14, 17, 21, 23,
-        27, 29, 30, 33, 62, 63, 73, 74, 91, 93, 114, 118, 119, 129, 146, 109, 22, 31,
-        35, 36, 37, 39, 40, 41, 42, 43, 44, -1, 50, 51, 53, 54, 55, 57, 58, 61, 69,
-        70, 71, 72, 76, 77, 78, 83, 84, 85, 86, 87, 88, 90, 92, 94, 95, 96, 98, 99,
-        100, 101, 102, 103, 104, 105, 106, 107, 108, 110, 111, 112, 115, 116, 120,
-        121, 122, 124, 125, 127, 128, 131, 132, 133, 136, 137, 138, 139, 140, 141,
-        142, 143, 144, 145, 148
+        27, 29, 30, 33, 62, 63, 73, 74, 91, 93, 114, 118, 119, 129, 146, 109
+    ]
+
+    # 변경했던 순서에서 75~149였던 클래스들의 원본 인덱스
+    unknown_class_indices = [
+        22, 31, 35, 36, 37, 39, 40, 41, 42, 43, 44, 50, 51, 53, 54, 55, 57, 58, 61,
+        69, 70, 71, 72, 76, 77, 78, 83, 84, 85, 86, 87, 88, 90, 92, 94, 95, 96, 98,
+        99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 110, 111, 112, 115, 116,
+        120, 121, 122, 124, 125, 127, 128, 131, 132, 133, 136, 137, 138, 139, 140,
+        141, 142, 143, 144, 145, 148
     ]
 
     ret = {
-        "original_sequence_class_ade150" : original_sequence_class_ade150,
-        "modified_sequence_class_ade150": modified_sequence_class_ade150,
-        "original_sequence_class_indices" : original_sequence_class_indices,
+        "stuff_classes" : original_sequence_class_ade150, # 원본 순서 사용
+        "known_class_indices": known_class_indices,       # Known 클래스 인덱스들
+        "unknown_class_indices": unknown_class_indices,   # Unknown 클래스 인덱스들
     }
     return ret
 

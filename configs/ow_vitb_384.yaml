@@ -9,7 +9,7 @@ MODEL:
     IGNORE_VALUE: 255
 
     # 🔧 NEW: Mode selection
-    EVALUATION_MODE: "OVSS"  # "OVSS" or "OWSS"
+    EVALUATION_MODE: "OWSS"  # "OVSS" or "OWSS"
     # OVSS Mode: Open-Vocabulary Semantic Segmentation
     # - 0~74: Known classes (text)
     # - 75~149: Unknown classes (text)

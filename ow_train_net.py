@@ -107,7 +107,7 @@ class OWPipelineHook(HookBase):
 class OWSemSegEvaluator(DatasetEvaluator):
     """
     Open-World Semantic Segmentation Evaluator.
-    Uses original_indices mapping with unknown=150 for clean separation.
+    Works with original ADE150 order, uses known/unknown indices for evaluation.
     """
 
     @configurable
@@ -140,37 +140,28 @@ class OWSemSegEvaluator(DatasetEvaluator):
         self.unknown_class_index = unknown_class_index
         self.evaluation_mode = evaluation_mode
 
-        # Meta 정보에서 매핑 데이터 가져오기
+        # 원복된 메타데이터에서 정보 가져오기
         self._num_known_classes = self.prev_intro_cls + self.cur_intro_cls  # 75
-        self._class_names = meta.modified_sequence_class_ade150  # 변경된 순서의 클래스명
-        self._original_indices = meta.original_sequence_class_indices  # 원본 인덱스 매핑
+        self._class_names = meta.stuff_classes  # 원본 ADE150 순서
+        self._known_class_indices = set(meta.known_class_indices)  # Known 클래스 인덱스들
+        self._unknown_class_indices = set(meta.unknown_class_indices)  # Unknown 클래스 인덱스들
         self._num_gt_classes = len(self._class_names)  # 150
-
-        # Known/Unknown 원본 인덱스 분리
-        self._known_original_indices = set(self._original_indices[:75])  # 변경된 순서 0~74에 해당하는 원본 인덱스들
-        self._unknown_original_indices = set(self._original_indices[75:])  # 변경된 순서 75~149에 해당하는 원본 인덱스들
-
-        # -1 (fireplace 누락) 처리
-        if -1 in self._known_original_indices:
-            self._known_original_indices.remove(-1)
-        if -1 in self._unknown_original_indices:
-            self._unknown_original_indices.remove(-1)
 
         # Mode-specific settings
         if evaluation_mode == "OVSS":
-            # OVSS: 150 classes, Known: 원본 인덱스 기준으로 구분
-            self._num_pred_classes = len(meta.modified_sequence_class_ade150)
+            # OVSS: 150 classes, 원본 인덱스 그대로 사용
+            self._num_pred_classes = len(meta.stuff_classes)
             self._logger.info(f"OVSS Mode:")
-            self._logger.info(f"  Known original indices: {sorted(list(self._known_original_indices))[:10]}...")
-            self._logger.info(f"  Unknown original indices: {sorted(list(self._unknown_original_indices))[:10]}...")
+            self._logger.info(f"  Known class indices: {sorted(list(self._known_class_indices))[:10]}...")
+            self._logger.info(f"  Unknown class indices: {sorted(list(self._unknown_class_indices))[:10]}...")
 
         elif evaluation_mode == "OWSS":
-            # OWSS: 76 classes (0~75), Known: 0~74, Unknown: 75 (GT에서는 150)
+            # OWSS: 76 classes (0~75), Known: 원본 인덱스 그대로, Unknown: 150
             self._num_pred_classes = self._num_known_classes + 1  # 75 known + 1 unknown
             self._unknown_pred_index = self._num_known_classes  # 75
             self._unknown_gt_index = 150  # GT에서 unknown은 150번
             self._logger.info(f"OWSS Mode:")
-            self._logger.info(f"  Known original indices: {sorted(list(self._known_original_indices))[:10]}...")
+            self._logger.info(f"  Known class indices: {sorted(list(self._known_class_indices))[:10]}...")
             self._logger.info(f"  Unknown GT index: {self._unknown_gt_index}")
         else:
             raise ValueError(f"Unknown evaluation mode: {evaluation_mode}")
@@ -200,15 +191,14 @@ class OWSemSegEvaluator(DatasetEvaluator):
             # OVSS: 150x151 confusion matrix (원본 인덱스 기준)
             self._conf_matrix = np.zeros((150, 151), dtype=np.int64)  # +1 for ignore
         elif self.evaluation_mode == "OWSS":
-            # OWSS: 76x152 confusion matrix
-            # Pred: 0~75 (76 classes)
-            # GT: 0~74(known), 150(unknown), 151(ignore)
-            self._conf_matrix = np.zeros((76, 152), dtype=np.int64)
+            # OWSS: 76x77 confusion matrix
+            # Pred: 0~75, GT: 0~74(known remapped) + 75(unknown) + 76(ignore)
+            self._conf_matrix = np.zeros((76, 77), dtype=np.int64)
 
         self._predictions = []
 
     def process(self, inputs, outputs):
-        """Process predictions and ground truth with original indices mapping"""
+        """Process predictions and ground truth"""
         for input, output in zip(inputs, outputs):
             output = output["sem_seg"].argmax(dim=0).to(self._cpu_device)
             pred = np.array(output, dtype=int)
@@ -231,9 +221,7 @@ class OWSemSegEvaluator(DatasetEvaluator):
 
     def process_ovss(self, pred, gt):
         """
-        OVSS Mode processing with original indices mapping
-        - Both pred and GT are in original ADE150 indices (0~149)
-        - Keep them as is since they're already in original indices
+        OVSS Mode processing - 원본 순서 그대로 사용
         """
         print(f"[OVSS] Pred range: {pred.min()}~{pred.max()}, GT range: {gt.min()}~{gt.max()}")
 
@@ -245,29 +233,27 @@ class OWSemSegEvaluator(DatasetEvaluator):
 
     def process_owss(self, pred, gt):
         """
-        OWSS Mode processing with unknown=150 (clean separation)
+        OWSS Mode processing - Known 클래스를 0~74로, Unknown을 75로 리매핑
         """
         print(f"[OWSS] Pred range: {pred.min()}~{pred.max()}, GT range: {gt.min()}~{gt.max()}")
-
         gt_remapped = gt.copy()
 
-        # Known 클래스 리매핑 (원본 인덱스 → 0~74)
-        for modified_idx, original_idx in enumerate(self._original_indices[:75]):
-            if original_idx != -1:  # fireplace 제외
-                gt_remapped[gt == original_idx] = modified_idx
+        # Known 클래스들을 0~74로 리매핑 (sorted order로 매핑)
+        known_indices_sorted = sorted(list(self._known_class_indices))
+        for new_idx, original_idx in enumerate(known_indices_sorted):
+            gt_remapped[gt == original_idx] = new_idx
 
-        # Unknown 클래스 리매핑 (원본 인덱스 → 150)
-        for original_idx in self._unknown_original_indices:
-            if original_idx != -1:
-                gt_remapped[gt == original_idx] = 150
+        # Unknown 클래스들을 75번으로 리매핑
+        for unknown_idx in self._unknown_class_indices:
+            gt_remapped[gt == unknown_idx] = 75
 
-        # Handle ignore label (255 → 151)
-        gt_remapped[gt == self._ignore_label] = 151
+        # Handle ignore label (255 → 76)
+        gt_remapped[gt == self._ignore_label] = 76
 
         # 통계 출력
         known_pixels = np.sum((gt_remapped >= 0) & (gt_remapped < 75))
-        unknown_pixels = np.sum(gt_remapped == 150)
-        ignore_pixels = np.sum(gt_remapped == 151)
+        unknown_pixels = np.sum(gt_remapped == 75)
+        ignore_pixels = np.sum(gt_remapped == 76)
 
         print(f"[OWSS] Remapped GT range: {gt_remapped.min()}~{gt_remapped.max()}")
         print(f"[OWSS] Known pixels: {known_pixels}, Unknown pixels: {unknown_pixels}, Ignore pixels: {ignore_pixels}")
@@ -296,9 +282,9 @@ class OWSemSegEvaluator(DatasetEvaluator):
 
     def evaluate_ovss(self):
         """
-        OVSS Mode evaluation with original indices mapping
+        OVSS Mode evaluation - Known/Unknown 인덱스 기반 분리 평가
         """
-        print("[OVSS] Evaluating Open-Vocabulary mode with original indices mapping...")
+        print("[OVSS] Evaluating Open-Vocabulary mode with known/unknown indices...")
 
         # Exclude ignore label column
         valid_conf_matrix = self._conf_matrix[:, :-1]  # 150x150
@@ -325,9 +311,9 @@ class OWSemSegEvaluator(DatasetEvaluator):
         fiou = np.sum(iou[iou_valid] * class_weights[iou_valid]) if np.sum(iou_valid) > 0 else 0.0
         pacc = np.sum(tp) / np.sum(pos_gt) if np.sum(pos_gt) > 0 else 0.0
 
-        # Known vs Unknown metrics using original indices
-        known_iou_values = [iou[i] for i in self._known_original_indices if i < len(iou) and iou_valid[i]]
-        unknown_iou_values = [iou[i] for i in self._unknown_original_indices if i < len(iou) and iou_valid[i]]
+        # Known vs Unknown metrics using class indices
+        known_iou_values = [iou[i] for i in self._known_class_indices if i < len(iou) and iou_valid[i]]
+        unknown_iou_values = [iou[i] for i in self._unknown_class_indices if i < len(iou) and iou_valid[i]]
 
         known_miou = np.mean(known_iou_values) if known_iou_values else 0.0
         unknown_miou = np.mean(unknown_iou_values) if unknown_iou_values else 0.0
@@ -337,25 +323,27 @@ class OWSemSegEvaluator(DatasetEvaluator):
         else:
             harmonic_mean = 0.0
 
-        print(f"[OVSS] Known classes (original indices): {known_miou:.4f}")
-        print(f"[OVSS] Unknown classes (original indices): {unknown_miou:.4f}")
+        print(f"[OVSS] Known classes: {known_miou:.4f}")
+        print(f"[OVSS] Unknown classes: {unknown_miou:.4f}")
         print(f"[OVSS] Harmonic Mean: {harmonic_mean:.4f}")
+        print(f"[OVSS] Known classes count: {len(known_iou_values)}/{len(self._known_class_indices)}")
+        print(f"[OVSS] Unknown classes count: {len(unknown_iou_values)}/{len(self._unknown_class_indices)}")
 
         return self.format_results(miou, fiou, macc, pacc, known_miou, unknown_miou, harmonic_mean, "OVSS")
 
     def evaluate_owss(self):
         """
-        OWSS Mode evaluation with unknown=150 (clean logic)
+        OWSS Mode evaluation - 76x77 confusion matrix
         """
-        print("[OWSS] Evaluating Open-World mode (unknown=150)...")
+        print("[OWSS] Evaluating Open-World mode...")
 
-        # Exclude ignore label column (151번 컬럼 제외)
-        valid_conf_matrix = self._conf_matrix[:, :-1]  # 76x151
+        # Exclude ignore label column (76번 컬럼 제외)
+        valid_conf_matrix = self._conf_matrix[:, :-1]  # 76x76
 
         print(f"[OWSS] Confusion matrix shape: {valid_conf_matrix.shape}")
         print(f"[OWSS] Total pixels: {valid_conf_matrix.sum()}")
 
-        # Known classes IoU (클래스별 개별 계산)
+        # Known classes IoU (개별 계산)
         known_iou_values = []
         for i in range(75):  # known classes 0~74
             tp = valid_conf_matrix[i, i]
@@ -369,22 +357,18 @@ class OWSemSegEvaluator(DatasetEvaluator):
         # Known mIoU
         known_miou = np.mean(known_iou_values) if known_iou_values else 0.0
 
-        # Unknown class metrics (pred 75 vs GT 150)
+        # Unknown class metrics (pred 75 vs GT 75)
         unknown_pred_idx = 75
-        unknown_gt_idx = 150
+        unknown_gt_idx = 75
 
-        # True Positive: GT unknown (150) predicted as unknown (75)
+        # True Positive: GT unknown (75) predicted as unknown (75)
         unknown_tp = valid_conf_matrix[unknown_pred_idx, unknown_gt_idx]
 
         # False Positive: GT known (0~74) predicted as unknown (75)
-        unknown_fp = 0
-        for gt_idx in range(75):
-            unknown_fp += valid_conf_matrix[unknown_pred_idx, gt_idx]
+        unknown_fp = np.sum(valid_conf_matrix[unknown_pred_idx, :75])
 
-        # False Negative: GT unknown (150) predicted as known (0~74)
-        unknown_fn = 0
-        for pred_idx in range(75):
-            unknown_fn += valid_conf_matrix[pred_idx, unknown_gt_idx]
+        # False Negative: GT unknown (75) predicted as known (0~74)
+        unknown_fn = np.sum(valid_conf_matrix[:75, unknown_gt_idx])
 
         print(f"[OWSS] Known metrics - Valid classes: {len(known_iou_values)}/75, mIoU: {known_miou:.4f}")
         print(f"[OWSS] Unknown metrics - TP: {unknown_tp}, FP: {unknown_fp}, FN: {unknown_fn}")
