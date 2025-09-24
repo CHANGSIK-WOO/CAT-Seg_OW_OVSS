@@ -35,6 +35,7 @@ python ow_train_net.py --config $config \
  --eval-only \
  OUTPUT_DIR $output/eval \
  MODEL.SEM_SEG_HEAD.TEST_CLASS_JSON "datasets/ade150.json" \
+ MODEL.SEM_SEG_HEAD.EMBEDDING_PATH "data/ADEChallengeData2016/cls_embeddings_original_sequence.npy" \
  DATASETS.TEST \(\"ade20k_150_ow_val_sem_seg\"\,\) \
  TEST.SLIDING_WINDOW "True" \
  MODEL.SEM_SEG_HEAD.POOLING_SIZES "[1,1]" \

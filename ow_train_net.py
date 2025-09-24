@@ -645,6 +645,18 @@ from cat_seg import (
     add_cat_seg_config,
 )
 
+
+# trainer = Trainer(cfg)
+# └─> DefaultTrainer.__init__(cfg)
+#     ├─> Trainer.build_model(cfg)           ✓ 호출됨
+#     ├─> Trainer.build_optimizer(cfg, model) ✓ 호출됨
+#     ├─> Trainer.build_train_loader(cfg)     ✓ 호출됨
+#     └─> Trainer.build_lr_scheduler(cfg, opt) ✓ 호출됨
+#
+# trainer.train()
+# └─> DefaultTrainer.train()
+#     └─> 필요시 Trainer.build_evaluator(...)  ✓ 호출됨
+
 class Trainer(DefaultTrainer):
     def __init__(self, cfg):
         super().__init__(cfg)
